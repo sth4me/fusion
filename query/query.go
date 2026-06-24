@@ -10,11 +10,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"fusion/builder"
 	"fusion/col"
 	"fusion/dialect"
 	"fusion/expr"
+	"fusion/logging"
 	"fusion/meta"
 	"fusion/scan"
 )
@@ -79,12 +81,16 @@ func (q *Query[T]) All(ctx context.Context) ([]T, error) {
 		Offset: q.offset,
 	}, q.d)
 
+	start := time.Now()
 	rows, err := q.execer.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
+		logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), Err: err})
 		return nil, fmt.Errorf("fusion: query: %w (sql=%s)", err, sqlStr)
 	}
 	defer rows.Close()
-	return scan.All[T](rows, q.table.Meta)
+	result, scanErr := scan.All[T](rows, q.table.Meta)
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: int64(len(result)), Err: scanErr})
+	return result, scanErr
 }
 
 // One 执行查询，返回第一行（自动加 LIMIT 1）。无结果返回 sql.ErrNoRows。
@@ -101,12 +107,20 @@ func (q *Query[T]) One(ctx context.Context) (T, error) {
 	}, q.d)
 	q.limit = saved
 
+	start := time.Now()
 	rows, err := q.execer.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
+		logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), Err: err})
 		return zero, fmt.Errorf("fusion: query: %w (sql=%s)", err, sqlStr)
 	}
 	defer rows.Close()
-	return scan.One[T](rows, q.table.Meta)
+	result, scanErr := scan.One[T](rows, q.table.Meta)
+	rowsN := int64(1)
+	if scanErr != nil {
+		rowsN = 0
+	}
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsN, Err: scanErr})
+	return result, scanErr
 }
 
 // Count 执行 SELECT COUNT(*) 查询。
@@ -122,10 +136,13 @@ func (q *Query[T]) Count(ctx context.Context) (int64, error) {
 		sqlStr += " WHERE " + whereSQL
 	}
 	var n int64
+	start := time.Now()
 	row := q.execer.QueryRowContext(ctx, sqlStr, r.args...)
 	if err := row.Scan(&n); err != nil {
+		logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: r.args, Duration: time.Since(start), Err: err})
 		return 0, fmt.Errorf("fusion: count: %w (sql=%s)", err, sqlStr)
 	}
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: r.args, Duration: time.Since(start), RowsAffected: 1})
 	return n, nil
 }
 

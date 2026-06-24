@@ -8,9 +8,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"fusion/dialect"
 	"fusion/hook"
+	"fusion/logging"
 	"fusion/meta"
 	"fusion/query"
 	"fusion/scan"
@@ -79,12 +82,15 @@ func DeleteDialect[T any](t *meta.Table[T], db DB, d dialect.Dialect) *query.Del
 // 这是兜底机制（见设计目标：最终允许 raw 语句）。
 func Raw[T any](out *[]T, ctx context.Context, db DB, sqlStr string, args ...any) error {
 	t := meta.Register[T]("")
+	start := time.Now()
 	rows, err := db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
+		logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), Err: err})
 		return fmt.Errorf("fusion: raw query: %w", err)
 	}
 	defer rows.Close()
 	res, err := scan.All[T](rows, t.Meta)
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: int64(len(res)), Err: err})
 	if err != nil {
 		return err
 	}
@@ -140,4 +146,28 @@ type HookFunc = hook.Func
 func OnHook(modelPtr any, event HookEvent, fn HookFunc) (unregister func()) {
 	return hook.Register(modelPtr, event, fn)
 }
+
+// --- 日志与查询拦截（见 docs/DESIGN.md 日志部分）---
+
+// QueryInfo 携带一次 SQL 执行的全部信息。
+type QueryInfo = logging.QueryInfo
+
+// QueryHook 查询拦截器类型。
+type QueryHook = logging.QueryHook
+
+// SetLogger 设置全局 slog.Logger。slog 可桥接 zap/zerolog/标准库。
+// 传入 nil 等同于丢弃所有日志。
+// 未调用时默认为 Level=Warn 的 stderr text logger（记慢查询和错误，SQL 需 Debug 级才看）。
+func SetLogger(l *slog.Logger) { logging.SetLogger(l) }
+
+// Logger 返回当前全局 logger。
+func Logger() *slog.Logger { return logging.Logger() }
+
+// AddQueryHook 注册查询拦截器，返回注销函数。
+// 每个 SQL 执行完成后调用，可拿到 QueryInfo（含 SQL/参数/耗时/RowsAffected/错误），
+// 供审计/慢查询/trace。
+func AddQueryHook(h QueryHook) (unregister func()) { return logging.AddQueryHook(h) }
+
+// SetSlowThreshold 设置慢查询阈值（默认 200ms）。超过则 Warn 级记录。
+func SetSlowThreshold(d time.Duration) { logging.SetSlowThreshold(d) }
 

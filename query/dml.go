@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"time"
 
 	"fusion/builder"
 	"fusion/dialect"
 	"fusion/expr"
 	"fusion/hook"
+	"fusion/logging"
 	"fusion/meta"
 )
 
@@ -95,12 +97,15 @@ func (i *Inserter[T]) Exec(ctx context.Context) error {
 	sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
 
 	// 分支：RETURNING vs LastInsertId
+	start := time.Now()
+	var rowsAffected int64
 	var execErr error
 	if i.d.SupportsReturning() && len(returningCols) > 0 {
-		execErr = i.execWithReturning(ctx, sqlStr, args, returningCols)
+		rowsAffected, execErr = i.execWithReturning(ctx, sqlStr, args, returningCols)
 	} else {
-		execErr = i.execWithLastInsertID(ctx, sqlStr, args, returningCols)
+		rowsAffected, execErr = i.execWithLastInsertID(ctx, sqlStr, args, returningCols)
 	}
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "INSERT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: execErr})
 	if execErr != nil {
 		return execErr
 	}
@@ -128,31 +133,34 @@ func (i *Inserter[T]) returningCols() []string {
 }
 
 // execWithReturning 执行 INSERT ... RETURNING 并回填主键。
-func (i *Inserter[T]) execWithReturning(ctx context.Context, sqlStr string, args []any, retCols []string) error {
+// 返回受影响行数（RETURNING 路径固定为 1）。
+func (i *Inserter[T]) execWithReturning(ctx context.Context, sqlStr string, args []any, retCols []string) (int64, error) {
 	row := i.execer.QueryRowContext(ctx, sqlStr, args...)
 	if row == nil {
-		return fmt.Errorf("fusion: QueryRow returned nil (sql=%s)", sqlStr)
+		return 0, fmt.Errorf("fusion: QueryRow returned nil (sql=%s)", sqlStr)
 	}
 	// 扫描 RETURNING 值回填到 target 的对应字段
 	dest := i.scanDestForCols(retCols)
 	if err := row.Scan(dest...); err != nil {
-		return fmt.Errorf("fusion: insert returning: %w (sql=%s)", err, sqlStr)
+		return 0, fmt.Errorf("fusion: insert returning: %w (sql=%s)", err, sqlStr)
 	}
-	return nil
+	return 1, nil
 }
 
 // execWithLastInsertID 执行 INSERT 并用 LastInsertId 回填（MySQL 旧版路径）。
-func (i *Inserter[T]) execWithLastInsertID(ctx context.Context, sqlStr string, args []any, retCols []string) error {
+// 返回受影响行数（从 sql.Result 取）。
+func (i *Inserter[T]) execWithLastInsertID(ctx context.Context, sqlStr string, args []any, retCols []string) (int64, error) {
 	res, err := i.execer.ExecContext(ctx, sqlStr, args...)
 	if err != nil {
-		return fmt.Errorf("fusion: insert: %w (sql=%s)", err, sqlStr)
+		return 0, fmt.Errorf("fusion: insert: %w (sql=%s)", err, sqlStr)
 	}
+	rows, _ := res.RowsAffected()
 	if len(retCols) == 0 {
-		return nil
+		return rows, nil
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return nil // 无法获取自增 ID 时静默（如非自增主键）
+		return rows, nil // 无法获取自增 ID 时静默（如非自增主键）
 	}
 	// 把 ID 回填到 target 的主键字段
 	dest := i.scanDestForCols(retCols)
@@ -161,7 +169,7 @@ func (i *Inserter[T]) execWithLastInsertID(ctx context.Context, sqlStr string, a
 			_ = sc.Scan(id)
 		}
 	}
-	return nil
+	return rows, nil
 }
 
 // sqlScannerLocal 是 sql.Scanner 的本地别名，避免导入冲突。
@@ -255,7 +263,13 @@ func (u *Updater[T]) Exec(ctx context.Context) error {
 		SetCols: cols,
 		Where:   u.where,
 	}, vals, u.d)
-	_, err := u.execer.ExecContext(ctx, sqlStr, args...)
+	start := time.Now()
+	res, err := u.execer.ExecContext(ctx, sqlStr, args...)
+	var rowsAffected int64
+	if err == nil && res != nil {
+		rowsAffected, _ = res.RowsAffected()
+	}
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "UPDATE", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: err})
 	if err != nil {
 		return fmt.Errorf("fusion: update: %w (sql=%s)", err, sqlStr)
 	}
@@ -309,7 +323,13 @@ func (d *Deleter[T]) Exec(ctx context.Context) error {
 	sqlStr, args := builder.BuildDELETE(d.table.Meta, builder.DeleteQuery{
 		Where: d.where,
 	}, d.d)
-	_, err := d.execer.ExecContext(ctx, sqlStr, args...)
+	start := time.Now()
+	res, err := d.execer.ExecContext(ctx, sqlStr, args...)
+	var rowsAffected int64
+	if err == nil && res != nil {
+		rowsAffected, _ = res.RowsAffected()
+	}
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "DELETE", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: err})
 	if err != nil {
 		return fmt.Errorf("fusion: delete: %w (sql=%s)", err, sqlStr)
 	}
