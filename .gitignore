@@ -1,0 +1,33 @@
+# 二进制/可执行文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试与覆盖率产物
+*.test
+*.out
+*.cover
+coverage.*
+cover.*
+
+# Go 工作区/构建缓存
+go.work
+go.work.sum
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.tmp
+*.log
