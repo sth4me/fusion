@@ -31,3 +31,6 @@ desktop.ini
 # 临时文件
 *.tmp
 *.log
+
+# Windows 保留设备名文件（命令误重定向产生）
+nul

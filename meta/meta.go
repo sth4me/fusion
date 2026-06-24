@@ -171,6 +171,41 @@ func Lookup(rt reflect.Type) TableOf {
 	return nil
 }
 
+// LookupByName 按类型的字符串名查找已注册的 Table。
+// 用于关联注册时从 Rel[T] 的类型参数名（如 "fusion_test.Post"）反查 reflect.Type。
+// 找不到返回 nil。
+func LookupByName(name string) reflect.Type {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	for rt := range registry {
+		if typeQualifiedName(rt) == name || rt.String() == name || rt.Name() == name {
+			return rt
+		}
+	}
+	return nil
+}
+
+// typeQualifiedName 返回类型的全名（包路径.类型名），与 reflect.Type.String() 一致。
+func typeQualifiedName(rt reflect.Type) string {
+	if rt.PkgPath() == "" {
+		return rt.String()
+	}
+	// reflect String() 形如 "fusion_test.Post"，已含包名简称；这里也提供 PkgPath.Name 形式
+	return rt.PkgPath() + "." + rt.Name()
+}
+
+// RangeTables 遍历所有已注册的 Table，fn 返回 false 停止遍历。
+// 供 relation 包做指针反查（当前实现未用，保留备用）。
+func RangeTables(fn func(rt reflect.Type, tab TableOf) bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	for rt, tab := range registry {
+		if !fn(rt, tab.(TableOf)) {
+			return
+		}
+	}
+}
+
 // isRelationType 判断字段类型是否为关联描述符（Rel/RelMany）。
 // 通过接口探测，避免 meta 依赖 col/rel 包（解耦）。
 func isRelationType(t reflect.Type) bool {
