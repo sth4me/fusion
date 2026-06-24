@@ -1,0 +1,15 @@
+# 默认使用 LF 换行符，避免 Windows CRLF 警告与跨平台差异
+* text=auto eol=lf
+
+# Go 源码与文本类强制 LF
+*.go       text eol=lf
+*.mod      text eol=lf
+*.sum      text eol=lf
+*.md       text eol=lf
+.gitignore text eol=lf
+
+# 二进制文件不处理换行
+*.exe  binary
+*.dll  binary
+*.so   binary
+*.dylib binary
