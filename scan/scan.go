@@ -82,6 +82,51 @@ func All[T any](rows Rows, m *meta.ModelMeta) ([]T, error) {
 	return out, nil
 }
 
+// AllRaw 是 All 的非泛型版，按 elemType 扫描进切片返回 any。
+// 供 query.AllInto 用（投影结构体 V 非模型 T，无法用泛型 All[V]）。
+func AllRaw(rows Rows, m *meta.ModelMeta, elemType reflect.Type) (any, error) {
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("fusion: read columns: %w", err)
+	}
+	fieldIdx := make([]int, len(cols))
+	for i, c := range cols {
+		fm := m.FieldByColumn(c)
+		if fm == nil {
+			fieldIdx[i] = -1
+			continue
+		}
+		fieldIdx[i] = fieldIndexByName(m, fm.FieldName)
+	}
+
+	out := reflect.MakeSlice(reflect.SliceOf(elemType), 0, 8)
+	for rows.Next() {
+		row := reflect.New(elemType).Elem()
+		dest := make([]any, len(cols))
+		for i, idx := range fieldIdx {
+			if idx < 0 {
+				var discard any
+				dest[i] = &discard
+				continue
+			}
+			fv := row.Field(idx).Addr().Interface()
+			if sc, ok := fv.(scanner); ok {
+				dest[i] = sc
+			} else {
+				dest[i] = fv
+			}
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return out.Interface(), fmt.Errorf("fusion: scan row: %w", err)
+		}
+		out = reflect.Append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return out.Interface(), fmt.Errorf("fusion: iterate rows: %w", err)
+	}
+	return out.Interface(), nil
+}
+
 // fieldIndexByName 返回结构体字段名对应的索引，找不到返回 -1。
 func fieldIndexByName(m *meta.ModelMeta, name string) int {
 	for i := 0; i < m.Type.NumField(); i++ {

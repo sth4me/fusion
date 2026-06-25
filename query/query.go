@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"time"
 
 	"fusion/builder"
@@ -24,15 +25,22 @@ import (
 
 // Query 是 SELECT 查询构建器。
 type Query[T any] struct {
-	table    *meta.Table[T]
-	d        dialect.Dialect
-	execer   queryExecer
+	table     *meta.Table[T]
+	d         dialect.Dialect
+	execer    queryExecer
 
-	where    expr.Expr
-	orders   []builder.OrderItem
-	limit    int
-	offset   int
-	preloads []string // 要预加载的关联字段名
+	where     expr.Expr
+	orders    []builder.OrderItem
+	limit     int
+	offset    int
+	preloads  []string // 要预加载的关联字段名
+
+	selectCols []builder.SelectItem // 投影列（空则整表）
+	joins      []builder.JoinSpec   // JOIN 子句
+	groupBy    []builder.GroupItem  // GROUP BY
+	having     expr.Expr            // HAVING
+	distinct   bool
+	alias      string               // 主表别名（Join/投影场景需要）
 }
 
 // QueryExecer 抽象执行 SQL 的能力（*sql.DB 或 *sql.Tx 都满足）。
@@ -82,14 +90,139 @@ func (q *Query[T]) Preload(fieldNames ...string) *Query[T] {
 	return q
 }
 
+// Select 设置投影列（灵活 Join / 聚合查询用）。配合 AllInto 扫描进投影结构体。
+func (q *Query[T]) Select(items ...builder.SelectItem) *Query[T] {
+	q.selectCols = append(q.selectCols, items...)
+	return q
+}
+
+// Join 添加 JOIN 子句。kind 为 "INNER"/"LEFT"/"RIGHT"/"FULL"，
+// joinedTable 为已注册的 Table（TableOf 接口，如 Depts），alias 为连接表别名，
+// on 为 ON 条件构造器（在主表与连接表别名都设置后调用，确保 EqCol 引用带前缀）。
+//
+// 用法：
+//   fusion.From(Users, db).As("u").
+//       Join(fusion.InnerJoin, Depts, "d", func() expr.Expr {
+//           return Users.Proto.DeptID.EqCol(Depts.Proto.ID)
+//       })
+func (q *Query[T]) Join(kind string, joinedTable meta.TableOf, alias string, on func() expr.Expr) *Query[T] {
+	setTableAliasOnMeta(joinedTable, alias)
+	var onExpr expr.Expr
+	if on != nil {
+		onExpr = on() // 此时主表别名(As 已设)与连接表别名都已就绪
+	}
+	q.joins = append(q.joins, builder.JoinSpec{
+		Kind:  kind,
+		Table: joinedTable.ModelMeta().Table,
+		Alias: alias,
+		On:    onExpr,
+	})
+	return q
+}
+
+// setTableAliasOnMeta 反射给 TableOf 的 Proto 字段设表别名。
+// Proto 是 TableOf 实现（*Table[T]）的 Proto 字段，通过 reflect 访问。
+func setTableAliasOnMeta(tab meta.TableOf, alias string) {
+	m := tab.ModelMeta()
+	rv := reflect.ValueOf(tab)
+	if rv.Kind() == reflect.Ptr {
+		rv = rv.Elem()
+	}
+	protoField := rv.FieldByName("Proto")
+	if !protoField.IsValid() || !protoField.CanAddr() {
+		return
+	}
+	pv := protoField.Addr()
+	for i := 0; i < pv.Elem().NumField(); i++ {
+		fv := pv.Elem().Field(i).Addr().Interface()
+		if sa, ok := fv.(interface{ SetTableAlias(string) }); ok {
+			sa.SetTableAlias(alias)
+		}
+	}
+	_ = m
+}
+
+// GroupBy 添加 GROUP BY 列引用。
+func (q *Query[T]) GroupBy(items ...builder.GroupItem) *Query[T] {
+	q.groupBy = append(q.groupBy, items...)
+	return q
+}
+
+// Having 设置 HAVING 条件（聚合后的过滤）。
+func (q *Query[T]) Having(e expr.Expr) *Query[T] {
+	q.having = e
+	return q
+}
+
+// Distinct 设置去重。
+func (q *Query[T]) Distinct() *Query[T] {
+	q.distinct = true
+	return q
+}
+
+// As 设置主表别名，并同步设置 Table.Proto 的字段表别名（供 ON/投影/Where 引用）。
+// Join/聚合场景必须先调用 As 设别名，否则列引用无表前缀。
+func (q *Query[T]) As(alias string) *Query[T] {
+	q.alias = alias
+	setTableAliasOnMeta(q.table, alias)
+	return q
+}
+
+// buildSelectQuery 把 Query 的字段组装成 builder.SelectQuery。
+func (q *Query[T]) buildSelectQuery() builder.SelectQuery {
+	return builder.SelectQuery{
+		Alias:      q.alias,
+		SelectCols: q.selectCols,
+		Joins:      q.joins,
+		Where:      q.where,
+		GroupBy:    q.groupBy,
+		Having:     q.having,
+		Orders:     q.orders,
+		Distinct:   q.distinct,
+		Limit:      q.limit,
+		Offset:     q.offset,
+	}
+}
+
+
+// AllInto 执行查询，扫描进 out 指向的 []V 切片（投影结构体，需已 Register）。
+// 用于灵活 Join / 聚合查询的结果承载（V 是自定义投影结构体，非模型 T）。
+func (q *Query[T]) AllInto(ctx context.Context, out any) error {
+	sq := q.buildSelectQuery()
+	sqlStr, args := builder.BuildSELECT(q.table.Meta, sq, q.d)
+	start := time.Now()
+	rows, err := q.execer.QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), Err: err})
+		return fmt.Errorf("fusion: query: %w (sql=%s)", err, sqlStr)
+	}
+	defer rows.Close()
+	// out 是 *[]V。反射取出 V 的类型，找其 ModelMeta（需已 Register），用 scan.All 扫描。
+	rv := reflect.ValueOf(out)
+	for rv.Kind() == reflect.Ptr {
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Slice {
+		return fmt.Errorf("fusion: AllInto requires *[]V, got %T", out)
+	}
+	elemType := rv.Type().Elem()
+	tab := meta.Lookup(elemType)
+	if tab == nil {
+		return fmt.Errorf("fusion: AllInto: projection type %s not registered (use fusion.Register first)", elemType)
+	}
+	result, scanErr := scan.AllRaw(rows, tab.ModelMeta(), elemType)
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: int64(reflect.ValueOf(result).Len()), Err: scanErr})
+	if scanErr != nil {
+		return scanErr
+	}
+	rv.Set(reflect.ValueOf(result))
+	return nil
+}
+
 // All 执行查询，扫描进 []T。
 func (q *Query[T]) All(ctx context.Context) ([]T, error) {
-	sqlStr, args := builder.BuildSELECT(q.table.Meta, builder.SelectQuery{
-		Where:  q.where,
-		Orders: q.orders,
-		Limit:  q.limit,
-		Offset: q.offset,
-	}, q.d)
+	sq := q.buildSelectQuery()
+	sqlStr, args := builder.BuildSELECT(q.table.Meta, sq, q.d)
 
 	start := time.Now()
 	rows, err := q.execer.QueryContext(ctx, sqlStr, args...)

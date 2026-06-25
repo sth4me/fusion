@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"fusion/col"
 	"fusion/dialect"
 	"fusion/hook"
 	"fusion/logging"
@@ -207,4 +208,32 @@ func BelongsTo(relField, parentFK, ref any) *relation.RelMeta {
 func ManyToMany(relField, joinLeftFK, joinRightFK, parentRef, childRef any) *relation.RelMeta {
 	return relation.ManyToMany(relField, joinLeftFK, joinRightFK, parentRef, childRef)
 }
+
+// --- 灵活 Join + 投影 + 聚合（见 docs/DESIGN.md 决策 4）---
+
+// JOIN 类型常量。
+const (
+	InnerJoin = "INNER"
+	LeftJoin  = "LEFT"
+	RightJoin = "RIGHT"
+	FullJoin  = "FULL"
+)
+
+// SelectItem 投影项类型（col.SelectItem 的别名）。
+type SelectItem = col.SelectItem
+
+// Count 聚合函数（COUNT(*) 或 COUNT(col)）。
+func Count[T any](c ...col.Col[T]) col.SelectItem { return col.Count[T](c...) }
+
+// Sum 聚合函数。
+func Sum[T any](c col.Col[T]) col.SelectItem { return col.Sum[T](c) }
+
+// Avg 聚合函数。
+func Avg[T any](c col.Col[T]) col.SelectItem { return col.Avg[T](c) }
+
+// Min 聚合函数。
+func Min[T any](c col.Col[T]) col.SelectItem { return col.Min[T](c) }
+
+// Max 聚合函数。
+func Max[T any](c col.Col[T]) col.SelectItem { return col.Max[T](c) }
 

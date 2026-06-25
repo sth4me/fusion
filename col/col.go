@@ -148,6 +148,15 @@ func (c Col[T]) Desc() Order { return Order{col: c.ref(), dir: "DESC"} }
 // RenderClause 渲染排序子句，d 提供列引用。
 func (o Order) RenderClause(d expr.Renderer) string { return d.QuoteCol(o.col) + " " + o.dir }
 
+// GroupCol 是 GROUP BY 项（纯列引用，无方向）。
+type GroupCol struct{ ref string }
+
+// GroupBy 生成 GROUP BY 列引用。
+func (c Col[T]) GroupBy() GroupCol { return GroupCol{ref: c.ref()} }
+
+// RenderClause 渲染 GROUP BY 列引用（实现 builder.GroupItem）。
+func (g GroupCol) RenderClause(d expr.Renderer) string { return d.QuoteCol(g.ref) }
+
 // --- 透明序列化（见决策1：JSON/SQL 全自动透明） ---
 
 // Valuer 用于把 Col[T] 内的值（可能是指针）转换为 SQL 可接受的值。

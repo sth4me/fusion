@@ -44,33 +44,80 @@ type OrderItem interface {
 	RenderClause(r expr.Renderer) string
 }
 
+// SelectItem 是投影项接口。col.SelectItem 实现它。
+type SelectItem interface {
+	RenderSelect(r expr.Renderer) string
+}
+
+// JoinSpec 描述一个 JOIN 子句。
+type JoinSpec struct {
+	Kind  string    // "INNER"/"LEFT"/"RIGHT"/"FULL"
+	Table string    // 被连接表名
+	Alias string    // 表别名
+	On    expr.Expr // ON 条件（EqCol 组合）
+}
+
+// GroupItem 是 GROUP BY 项接口（col.Col 实现 RenderClause）。
+type GroupItem interface {
+	RenderClause(r expr.Renderer) string
+}
+
 // SelectQuery 描述一个 SELECT 查询的配置。
 type SelectQuery struct {
-	Table  string     // 表名
-	Alias  string     // 表别名（默认无别名，用列名）
-	Where  expr.Expr
-	Orders []OrderItem // 排序子句（col.Asc()/Desc() 返回的 Order）
-	Limit  int
-	Offset int
+	Table      string        // 主表名
+	Alias      string        // 主表别名
+	SelectCols []SelectItem  // 投影列（空则整表所有列，向后兼容）
+	Joins      []JoinSpec    // JOIN 子句
+	Where      expr.Expr
+	GroupBy    []GroupItem   // GROUP BY 项
+	Having     expr.Expr
+	Orders     []OrderItem   // 排序子句
+	Distinct   bool
+	Limit      int
+	Offset     int
 }
 
 // BuildSELECT 生成 SELECT 语句的 (SQL, args)。
-// m 提供列名列表，d 提供方言。
+// m 提供列名列表（仅当 SelectCols 为空时用于整表投影）；d 提供方言。
 func BuildSELECT(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, []any) {
 	r := &renderer{d: d, alias: q.Alias}
 
-	// SELECT 列：所有字段的表别名.列名
-	colParts := make([]string, 0, len(m.Fields))
-	for _, f := range m.Fields {
-		ref := f.Column
-		if q.Alias != "" {
-			ref = q.Alias + "." + f.Column
+	// SELECT 列：有 SelectCols 用投影项，否则整表所有列（向后兼容）
+	var colParts []string
+	if len(q.SelectCols) > 0 {
+		colParts = make([]string, 0, len(q.SelectCols))
+		for _, item := range q.SelectCols {
+			colParts = append(colParts, item.RenderSelect(r))
 		}
-		colParts = append(colParts, r.QuoteCol(ref))
+	} else {
+		colParts = make([]string, 0, len(m.Fields))
+		for _, f := range m.Fields {
+			ref := f.Column
+			if q.Alias != "" {
+				ref = q.Alias + "." + f.Column
+			}
+			colParts = append(colParts, r.QuoteCol(ref))
+		}
 	}
-	sql := "SELECT " + strings.Join(colParts, ", ") + " FROM " + d.QuoteTable(m.Table)
+
+	prefix := "SELECT "
+	if q.Distinct {
+		prefix = "SELECT DISTINCT "
+	}
+	sql := prefix + strings.Join(colParts, ", ") + " FROM " + d.QuoteTable(m.Table)
 	if q.Alias != "" {
 		sql += " AS " + d.QuoteIdent(q.Alias)
+	}
+
+	// JOIN
+	for _, j := range q.Joins {
+		sql += " " + j.Kind + " JOIN " + d.QuoteTable(j.Table)
+		if j.Alias != "" {
+			sql += " AS " + d.QuoteIdent(j.Alias)
+		}
+		if !j.On.IsZero() {
+			sql += " ON " + j.On.Render(r)
+		}
 	}
 
 	// WHERE
@@ -78,6 +125,23 @@ func BuildSELECT(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, [
 		where := q.Where.Render(r)
 		if where != "" {
 			sql += " WHERE " + where
+		}
+	}
+
+	// GROUP BY
+	if len(q.GroupBy) > 0 {
+		parts := make([]string, 0, len(q.GroupBy))
+		for _, g := range q.GroupBy {
+			parts = append(parts, g.RenderClause(r))
+		}
+		sql += " GROUP BY " + strings.Join(parts, ", ")
+	}
+
+	// HAVING
+	if !q.Having.IsZero() {
+		having := q.Having.Render(r)
+		if having != "" {
+			sql += " HAVING " + having
 		}
 	}
 
