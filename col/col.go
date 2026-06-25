@@ -109,6 +109,12 @@ func (c Col[T]) Lt(v T) expr.Expr { return c.compareExpr("<", v) }
 // Lte 生成小于等于表达式（<=）。
 func (c Col[T]) Lte(v T) expr.Expr { return c.compareExpr("<=", v) }
 
+// Like 生成模糊匹配表达式（LIKE）。
+func (c Col[T]) Like(v T) expr.Expr { return c.compareExpr("LIKE", v) }
+
+// NotLike 生成不匹配表达式（NOT LIKE）。
+func (c Col[T]) NotLike(v T) expr.Expr { return c.compareExpr("NOT LIKE", v) }
+
 // In 生成 IN 表达式。
 func (c Col[T]) In(vs []T) expr.Expr {
 	args := make([]any, len(vs))
@@ -116,6 +122,11 @@ func (c Col[T]) In(vs []T) expr.Expr {
 		args[i] = v
 	}
 	return expr.LeafMulti(c.ref(), "IN", args)
+}
+
+// Between 生成区间表达式（col BETWEEN lo AND hi）。
+func (c Col[T]) Between(lo, hi T) expr.Expr {
+	return expr.LeafBetween(c.ref(), lo, hi)
 }
 
 // IsNull 生成 IS NULL 表达式。

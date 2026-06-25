@@ -22,20 +22,28 @@ type InsertQuery struct {
 	UpdateCols []string
 }
 
-// BuildINSERT 生成 INSERT 语句的 (SQL, args)。
-// values 是按 Cols 顺序对应的 SQL 值（已做 NULL/指针转换）。
-// 返回的 args 不含 RETURNING 的值（RETURNING 不需要参数）。
+// BuildINSERT 生成单行 INSERT 语句。
 func BuildINSERT(m *meta.ModelMeta, q InsertQuery, values []any, d dialect.Dialect) (string, []any) {
+	return BuildINSERTBatch(m, q, [][]any{values}, d)
+}
+
+// BuildINSERTBatch 生成多行 INSERT 语句。
+// rows 是多行值，每行按 Cols 顺序对应。所有行列数必须一致。
+func BuildINSERTBatch(m *meta.ModelMeta, q InsertQuery, rows [][]any, d dialect.Dialect) (string, []any) {
 	r := &renderer{d: d, aliasMap: map[string]string{}}
-	ph := make([]string, len(q.Cols))
-	args := make([]any, 0, len(values))
-	for i := range q.Cols {
-		ph[i] = r.NextPlaceholder()
-		args = append(args, values[i])
+	args := make([]any, 0, len(rows)*len(q.Cols))
+	rowPh := make([]string, len(rows))
+	for ri, row := range rows {
+		ph := make([]string, len(q.Cols))
+		for i := range q.Cols {
+			ph[i] = r.NextPlaceholder()
+			args = append(args, row[i])
+		}
+		rowPh[ri] = "(" + strings.Join(ph, ", ") + ")"
 	}
 
 	sql := "INSERT INTO " + d.QuoteTable(m.Table) +
-		" (" + quoteList(q.Cols, d) + ") VALUES (" + strings.Join(ph, ", ") + ")"
+		" (" + quoteList(q.Cols, d) + ") VALUES " + strings.Join(rowPh, ", ")
 
 	// UPSERT 子句
 	if q.DoUpsert {

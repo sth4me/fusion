@@ -51,7 +51,20 @@ func FromDialect[T any](t *meta.Table[T], db DB, d dialect.Dialect) *query.Query
 }
 
 // Insert 返回绑定到 target 实体的 Inserter（插入 target 中已 Set 的字段）。
+// 无 Where 的 Update 自动按主键更新；Insert 支持 .OnConflict 做 Upsert。
 func Insert[T any](t *meta.Table[T], db DB, target *T) *query.Inserter[T] {
+	return query.NewInsert[T](t, defaultDialect, db, target)
+}
+
+// InsertBatch 批量插入。targets 的已 Set 列取并集，缺失列填 NULL。
+// RETURNING 路径逐行回填主键；MySQL 旧版只回填首个主键（文档限制）。
+func InsertBatch[T any](t *meta.Table[T], db DB, targets []*T) *query.Inserter[T] {
+	return query.NewInsertBatch[T](t, defaultDialect, db, targets)
+}
+
+// Upsert 是 Insert 的别名，语义提示用 OnConflict（INSERT...ON CONFLICT/ON DUPLICATE KEY）。
+// 用法：fusion.Upsert(Users, db, &u).OnConflict([]string{"id"}, []string{"name"}).Exec(ctx)
+func Upsert[T any](t *meta.Table[T], db DB, target *T) *query.Inserter[T] {
 	return query.NewInsert[T](t, defaultDialect, db, target)
 }
 

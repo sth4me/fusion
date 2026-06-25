@@ -168,11 +168,30 @@ func LeafRawSQL(leftExpr, op string, param any) Expr {
 	return Expr{n: rawLeafNode{left: leftExpr, op: op, param: param}}
 }
 
+// LeafBetween 生成 BETWEEN 表达式（col BETWEEN $1 AND $2）。
+func LeafBetween(col string, lo, hi any) Expr {
+	return Expr{n: betweenNode{col: col, lo: lo, hi: hi}}
+}
+
 // rawLeafNode 是原始左操作数的叶节点（不 quote，用于聚合函数）。
 type rawLeafNode struct {
 	left  string // 原始 SQL 片段（如 "COUNT(*)"），不 quote
 	op    string
 	param any
+}
+
+// betweenNode 是 BETWEEN 的载体。
+type betweenNode struct {
+	col string
+	lo  any
+	hi  any
+}
+
+func (betweenNode) kind() nodeKind { return kindLeaf }
+func (b betweenNode) render(_ nodeKind, d Renderer) string {
+	d.AddParam(b.lo)
+	d.AddParam(b.hi)
+	return d.QuoteCol(b.col) + " BETWEEN " + d.NextPlaceholder() + " AND " + d.NextPlaceholder()
 }
 
 func (rawLeafNode) kind() nodeKind { return kindLeaf }

@@ -3,6 +3,7 @@ package fusion_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	"fusion"
@@ -199,10 +200,13 @@ func TestE2E_One(t *testing.T) {
 		t.Errorf("got %q", u.Name.Get())
 	}
 
-	// 不存在的记录
+	// 不存在的记录（One 返回包装的 ErrNotFound，errors.Is 兼容 sql.ErrNoRows）
 	_, err = fusion.From(Users, db).Where(Users.Proto.Name.Eq("zzz")).One(context.Background())
-	if err != sql.ErrNoRows {
-		t.Errorf("got %v, want sql.ErrNoRows", err)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("got %v, want sql.ErrNoRows (wrapped)", err)
+	}
+	if !errors.Is(err, fusion.ErrNotFound) {
+		t.Errorf("got %v, want fusion.ErrNotFound", err)
 	}
 }
 

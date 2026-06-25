@@ -9,6 +9,7 @@ package query
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -22,6 +23,10 @@ import (
 	"fusion/relation"
 	"fusion/scan"
 )
+
+// ErrNotFound 表示查询无结果。根包 fusion.ErrNotFound 是此别名。
+// errors.Is(err, ErrNotFound) 与 errors.Is(err, sql.ErrNoRows) 均兼容。
+var ErrNotFound = errors.New("fusion: not found")
 
 // Query 是 SELECT 查询构建器。
 type Query[T any] struct {
@@ -263,6 +268,10 @@ func (q *Query[T]) One(ctx context.Context) (T, error) {
 	}
 	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsN, Err: scanErr})
 	if scanErr != nil {
+		// sql.ErrNoRows 包装为 ErrNotFound（errors.Is 兼容两者）
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return result, fmt.Errorf("%w: %w", ErrNotFound, sql.ErrNoRows)
+		}
 		return result, scanErr
 	}
 	// 显式 Close rows，释放连接（单连接模式下 Preload 子查询需要复用连接）

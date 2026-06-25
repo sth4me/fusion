@@ -30,17 +30,31 @@ type Inserter[T any] struct {
 	d      dialect.Dialect
 	execer queryExecer
 
-	// 目标实体（已 Set 过要插入的值）。
+	// 单条插入目标。
 	target *T
+	// 批量插入目标（非空时走批量路径）。
+	targets []*T
 	// Upsert 配置。
 	doUpsert       bool
 	conflictFields []string
 	updateFields   []string
 }
 
-// NewInsert 构造 Inserter。
+// NewInsert 构造单条 Inserter。
 func NewInsert[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer, target *T) *Inserter[T] {
 	return &Inserter[T]{table: t, d: d, execer: execer, target: target}
+}
+
+// NewInsertBatch 构造批量 Inserter。
+func NewInsertBatch[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer, targets []*T) *Inserter[T] {
+	return &Inserter[T]{table: t, d: d, execer: execer, targets: targets}
+}
+
+// Batch 设置批量目标（覆盖单条 target）。
+func (i *Inserter[T]) Batch(targets []*T) *Inserter[T] {
+	i.targets = targets
+	i.target = nil
+	return i
 }
 
 // OnConflict 配置 UPSERT 冲突目标与更新列（字段列名）。
@@ -52,9 +66,8 @@ func (i *Inserter[T]) OnConflict(conflictCols, updateCols []string) *Inserter[T]
 }
 
 // collectSetCols 从 target 收集所有已 Set（IsSet==true）字段的列名与 SQL 值。
-// 用于 Insert（插入全部已 Set 字段）和局部 Update。
-func (i *Inserter[T]) collectSetCols() (cols []string, vals []any, err error) {
-	entries := i.table.Meta.CollectFields(i.target)
+func (i *Inserter[T]) collectSetCols(target *T) (cols []string, vals []any, err error) {
+	entries := i.table.Meta.CollectFields(target)
 	for _, e := range entries {
 		if !e.Valuer.IsSet() {
 			continue
@@ -69,23 +82,116 @@ func (i *Inserter[T]) collectSetCols() (cols []string, vals []any, err error) {
 	return cols, vals, nil
 }
 
-// Exec 执行 INSERT。
-//   - 触发 BeforeCreate 钩子（返回 error 则中止）
-//   - 方言支持 RETURNING 且有自增主键时，回填 target 的主键字段
-//   - 方言不支持 RETURNING（MySQL 旧版）时，用 LastInsertId 回填
-//   - 成功后触发 AfterCreate 钩子
+// unionBatchCols 取所有 batch target 的 set 列并集（按首次出现顺序）。
+func (i *Inserter[T]) unionBatchCols() []string {
+	seen := map[string]bool{}
+	var cols []string
+	for _, t := range i.targets {
+		entries := i.table.Meta.CollectFields(t)
+		for _, e := range entries {
+			if e.Valuer.IsSet() && !seen[e.Column] {
+				seen[e.Column] = true
+				cols = append(cols, e.Column)
+			}
+		}
+	}
+	return cols
+}
+
+// collectRowAligned 按 cols 顺序收集单个 target 的值（缺失列填 nil）。
+func (i *Inserter[T]) collectRowAligned(target *T, cols []string) []any {
+	entries := i.table.Meta.CollectFields(target)
+	byCol := map[string]any{}
+	for _, e := range entries {
+		if e.Valuer.IsSet() {
+			v, _ := e.Valuer.SQLValue()
+			byCol[e.Column] = v
+		}
+	}
+	row := make([]any, len(cols))
+	for j, c := range cols {
+		if v, ok := byCol[c]; ok {
+			row[j] = v
+		} else {
+			row[j] = nil
+		}
+	}
+	return row
+}
+
+// execBatchReturning 批量 INSERT RETURNING，扫描多行回填主键到各 target。
+func (i *Inserter[T]) execBatchReturning(ctx context.Context, sqlStr string, args []any, retCols []string) (int64, error) {
+	rows, err := i.execer.QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return 0, fmt.Errorf("fusion: batch insert: %w (sql=%s)", err, sqlStr)
+	}
+	defer rows.Close()
+	// 读 RETURNING 主键列，按行序回填各 target
+	pkCol := ""
+	if len(retCols) > 0 {
+		pkCol = retCols[0]
+	}
+	n := int64(0)
+	ti := 0
+	for rows.Next() {
+		if ti >= len(i.targets) {
+			break
+		}
+		// 扫描主键值回填
+		dest := i.scanDestForColsTarget(i.targets[ti], retCols)
+		if err := rows.Scan(dest...); err != nil {
+			return n, fmt.Errorf("fusion: batch insert returning: %w", err)
+		}
+		n++
+		ti++
+	}
+	_ = pkCol
+	return n, rows.Err()
+}
+
+// execBatchLastInsertID 批量 INSERT 无 RETURNING（MySQL 旧版）。
+// MySQL LastInsertId 只返回首个 ID，批量场景仅回填首个 target（文档限制）。
+func (i *Inserter[T]) execBatchLastInsertID(ctx context.Context, sqlStr string, args []any) (int64, error) {
+	res, err := i.execer.ExecContext(ctx, sqlStr, args...)
+	if err != nil {
+		return 0, fmt.Errorf("fusion: batch insert: %w (sql=%s)", err, sqlStr)
+	}
+	n, _ := res.RowsAffected()
+	if len(i.targets) > 0 {
+		id, err := res.LastInsertId()
+		if err == nil && len(i.returningCols()) > 0 {
+			// 只回填首个 target（MySQL 限制）
+			dest := i.scanDestForColsTarget(i.targets[0], i.returningCols())
+			for _, d := range dest {
+				if sc, ok := d.(sqlScannerLocal); ok {
+					_ = sc.Scan(id)
+				}
+			}
+		}
+	}
+	return n, nil
+}
+
+// Exec 执行 INSERT（单条或批量，取决于 target/targets）。
 func (i *Inserter[T]) Exec(ctx context.Context) error {
+	if len(i.targets) > 0 {
+		return i.execBatch(ctx)
+	}
+	return i.execSingle(ctx)
+}
+
+// execSingle 单条插入。
+func (i *Inserter[T]) execSingle(ctx context.Context) error {
 	// BeforeCreate 钩子
 	if err := hook.Trigger(ctx, i.target, hook.BeforeCreate); err != nil {
 		return fmt.Errorf("fusion: BeforeCreate hook: %w", err)
 	}
 
-	cols, vals, err := i.collectSetCols()
+	cols, vals, err := i.collectSetCols(i.target)
 	if err != nil {
 		return err
 	}
 
-	// 确定 RETURNING 列：标记为主键/自增的字段（MVP 用元数据首字段约定，简化）
 	returningCols := i.returningCols()
 	q := builder.InsertQuery{
 		Cols:          cols,
@@ -96,7 +202,6 @@ func (i *Inserter[T]) Exec(ctx context.Context) error {
 	}
 	sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
 
-	// 分支：RETURNING vs LastInsertId
 	start := time.Now()
 	var rowsAffected int64
 	var execErr error
@@ -117,17 +222,65 @@ func (i *Inserter[T]) Exec(ctx context.Context) error {
 	return nil
 }
 
+// execBatch 批量插入。
+func (i *Inserter[T]) execBatch(ctx context.Context) error {
+	// BeforeCreate 钩子逐条触发
+	for _, t := range i.targets {
+		if err := hook.Trigger(ctx, t, hook.BeforeCreate); err != nil {
+			return fmt.Errorf("fusion: BeforeCreate hook: %w", err)
+		}
+	}
+
+	// 收集每行的 set 列（取所有行的列并集；每行按列填值，缺失填 nil）
+	cols := i.unionBatchCols()
+	rows := make([][]any, 0, len(i.targets))
+	for _, t := range i.targets {
+		row := i.collectRowAligned(t, cols)
+		rows = append(rows, row)
+	}
+
+	returningCols := i.returningCols()
+	q := builder.InsertQuery{
+		Cols:          cols,
+		ReturningCols: returningCols,
+		DoUpsert:      i.doUpsert,
+		ConflictCols:  i.conflictFields,
+		UpdateCols:    i.updateFields,
+	}
+	sqlStr, args := builder.BuildINSERTBatch(i.table.Meta, q, rows, i.d)
+
+	start := time.Now()
+	var rowsAffected int64
+	var execErr error
+	if i.d.SupportsReturning() && len(returningCols) > 0 {
+		rowsAffected, execErr = i.execBatchReturning(ctx, sqlStr, args, returningCols)
+	} else {
+		rowsAffected, execErr = i.execBatchLastInsertID(ctx, sqlStr, args)
+	}
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "INSERT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: execErr})
+	if execErr != nil {
+		return execErr
+	}
+
+	// AfterCreate 钩子逐条触发
+	for _, t := range i.targets {
+		if err := hook.Trigger(ctx, t, hook.AfterCreate); err != nil {
+			return fmt.Errorf("fusion: AfterCreate hook: %w", err)
+		}
+	}
+	return nil
+}
+
+
 // returningCols 返回需要回填的列（主键列名）。
 // MVP：模型首个字段约定为主键，返回其列名。
 func (i *Inserter[T]) returningCols() []string {
 	if len(i.table.Meta.Fields) == 0 {
 		return nil
 	}
-	// 跳过关联字段，取首个普通字段作为主键
-	for _, f := range i.table.Meta.Fields {
-		if !f.IsRelation {
-			return []string{f.Column}
-		}
+	// 用 IsPrimaryKey 标记的主键列
+	if pk := primaryKeyColumn(i.table.Meta); pk != "" {
+		return []string{pk}
 	}
 	return nil
 }
@@ -179,13 +332,17 @@ type sqlScannerLocal interface {
 
 // scanDestForCols 构造目标字段指针列表，用于 Scan 回填 RETURNING/LastInsertId。
 func (i *Inserter[T]) scanDestForCols(cols []string) []any {
-	entries := i.table.Meta.CollectFields(i.target)
-	// 建立 列名 → FieldIndex 映射
+	return i.scanDestForColsTarget(i.target, cols)
+}
+
+// scanDestForColsTarget 对指定 target 构造字段指针列表（批量回填用）。
+func (i *Inserter[T]) scanDestForColsTarget(target *T, cols []string) []any {
+	entries := i.table.Meta.CollectFields(target)
 	idxByCol := make(map[string]int, len(entries))
 	for _, e := range entries {
 		idxByCol[e.Column] = e.FieldIndex
 	}
-	rv := reflectValueElem(i.target)
+	rv := reflectValueElem(target)
 	dest := make([]any, 0, len(cols))
 	for _, c := range cols {
 		idx, ok := idxByCol[c]
@@ -230,6 +387,25 @@ func (u *Updater[T]) AllFields() *Updater[T] {
 	return u
 }
 
+// buildPKWhere 用 target 的主键值构造 WHERE（主键列 = 值）。
+func (u *Updater[T]) buildPKWhere() (expr.Expr, error) {
+	pkCol := primaryKeyColumn(u.table.Meta)
+	if pkCol == "" {
+		return expr.Expr{}, fmt.Errorf("fusion: update without Where requires a primary key")
+	}
+	entries := u.table.Meta.CollectFields(u.target)
+	for _, e := range entries {
+		if e.Column == pkCol {
+			v, err := e.Valuer.SQLValue()
+			if err != nil {
+				return expr.Expr{}, err
+			}
+			return expr.LeafParam(pkCol, "=", v), nil
+		}
+	}
+	return expr.Expr{}, fmt.Errorf("fusion: primary key %s not found on target", pkCol)
+}
+
 // Exec 执行 UPDATE（触发 BeforeUpdate/AfterUpdate 钩子）。
 func (u *Updater[T]) Exec(ctx context.Context) error {
 	// BeforeUpdate 钩子
@@ -259,9 +435,19 @@ func (u *Updater[T]) Exec(ctx context.Context) error {
 		return fmt.Errorf("fusion: update with no fields (did you Set any field?)")
 	}
 
+	// 若未设 Where，自动用 target 主键构造（便捷：Update(t,db,&u).Exec 按主键更新）
+	where := u.where
+	if where.IsZero() {
+		pkWhere, err := u.buildPKWhere()
+		if err != nil {
+			return err
+		}
+		where = pkWhere
+	}
+
 	sqlStr, args := builder.BuildUPDATE(u.table.Meta, builder.UpdateQuery{
 		SetCols: cols,
-		Where:   u.where,
+		Where:   where,
 	}, vals, u.d)
 	start := time.Now()
 	res, err := u.execer.ExecContext(ctx, sqlStr, args...)
@@ -290,6 +476,16 @@ func isPrimaryKey(m *meta.ModelMeta, col string) bool {
 		return f.Column == col
 	}
 	return false
+}
+
+// primaryKeyColumn 返回模型的主键列名（从 FieldMeta.IsPrimaryKey 取，无则空）。
+func primaryKeyColumn(m *meta.ModelMeta) string {
+	for _, f := range m.Fields {
+		if f.IsPrimaryKey {
+			return f.Column
+		}
+	}
+	return ""
 }
 
 // Deleter 是 DELETE 语句构建器。
