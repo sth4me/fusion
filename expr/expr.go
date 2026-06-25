@@ -162,6 +162,25 @@ func LeafParam(col, op string, param any) Expr {
 	return Expr{n: leafNode{s: leafSpec{col: col, op: op, param: param}}}
 }
 
+// LeafRawSQL 用原始左操作数（不 quote，如聚合函数 COUNT(*)）、运算符、参数构造叶节点。
+// 用于 HAVING 聚合比较（聚合函数不该被当列名引用）。
+func LeafRawSQL(leftExpr, op string, param any) Expr {
+	return Expr{n: rawLeafNode{left: leftExpr, op: op, param: param}}
+}
+
+// rawLeafNode 是原始左操作数的叶节点（不 quote，用于聚合函数）。
+type rawLeafNode struct {
+	left  string // 原始 SQL 片段（如 "COUNT(*)"），不 quote
+	op    string
+	param any
+}
+
+func (rawLeafNode) kind() nodeKind { return kindLeaf }
+func (r rawLeafNode) render(_ nodeKind, d Renderer) string {
+	d.AddParam(r.param)
+	return r.left + " " + r.op + " " + d.NextPlaceholder()
+}
+
 // LeafMulti 用列名、运算符、多值参数构造叶节点（用于 IN）。
 func LeafMulti(col, op string, params []any) Expr {
 	return Expr{n: leafNode{s: leafSpec{col: col, op: op, multi: params}}}

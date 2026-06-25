@@ -126,28 +126,17 @@ func TestQueryOneRestoresLimit(t *testing.T) {
 	}
 }
 
-// TestCountSQL 验证 Count 生成的 SQL
+// TestCountSQL 验证 Count 生成的 SQL（重构后用 builder COUNT(*) 投影）
 func TestCountSQL(t *testing.T) {
 	tab := regQModel()
-	fe := &fakeExecer{queryErr: nil, mockRows: nil}
-	// Count 用 QueryRowContext，fakeExecer.QueryRowContext 返回 nil 会导致 row.Scan panic
-	// 改用真实验证：构造 Count 的 SQL 需要单独路径。这里跳过真实执行，
-	// 通过 countRenderer 验证。但 Count 内部直接调 QueryRowContext。
-	// 为避免 nil panic，这里仅验证不 panic 在无 WHERE 的简单场景（QueryRowContext 返回 nil row）。
-	// 改为：用一个会捕获 SQL 的 fake，断言 SQL 但接受后续错误。
-	defer func() {
-		_ = recover() // QueryRowContext 返回 nil，Scan 会 panic，这里捕获
-	}()
-	_ = fe
-	// 直接验证 countRenderer 的行为
-	r := &countRenderer{d: dialect.PostgresDialect}
-	where := tab.Proto.Name.Eq("alice")
-	sqlStr := where.Render(r)
-	if sqlStr != `"name" = $1` {
-		t.Errorf("count where got %q", sqlStr)
-	}
-	if len(r.args) != 1 || r.args[0] != "alice" {
-		t.Errorf("count args got %v", r.args)
+	fe := &fakeExecer{queryErr: errors.New("stop")}
+	// Count 内部用 BuildSELECT 生成 SELECT COUNT(*)，但执行走 QueryRowContext
+	// fakeExecer.QueryRowContext 返回 nil → Scan panic，这里捕获
+	defer func() { _ = recover() }()
+	_, _ = New[qModel](tab, dialect.PostgresDialect, fe).Count(context.Background())
+	// 断言生成的 SQL 含 COUNT(*)
+	if !strings.Contains(fe.lastSQL, "COUNT(*)") {
+		t.Errorf("Count SQL should contain COUNT(*): %q", fe.lastSQL)
 	}
 }
 

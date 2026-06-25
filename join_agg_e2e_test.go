@@ -164,4 +164,64 @@ func TestLeftJoin(t *testing.T) {
 	}
 }
 
+// TestCount 重构后 Count 行为验证
+func TestCount(t *testing.T) {
+	wrapped, raw := setupJoinDB(t)
+	defer raw.Close()
+	Users := fusion.Register[JUser]("jusers")
+
+	// 全部计数
+	n, err := fusion.From(Users, wrapped).Count(context.Background())
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 4 {
+		t.Errorf("count all got %d, want 4", n)
+	}
+
+	// 带 WHERE 计数
+	Users.Proto.DeptID.SetTableAlias("")
+	n2, err := fusion.From(Users, wrapped).
+		Where(Users.Proto.DeptID.Eq(1)).
+		Count(context.Background())
+	if err != nil {
+		t.Fatalf("count where: %v", err)
+	}
+	if n2 != 3 {
+		t.Errorf("count dept=1 got %d, want 3", n2)
+	}
+}
+
+// TestHaving GROUP BY + HAVING
+func TestHaving(t *testing.T) {
+	wrapped, raw := setupJoinDB(t)
+	defer raw.Close()
+	Users := fusion.Register[JUser]("jusers")
+
+	type DeptCnt struct {
+		DeptID int64 `db:"dept_id"`
+		Cnt    int64 `db:"cnt"`
+	}
+	fusion.Register[DeptCnt]("")
+
+	// 设别名后构造
+	fusion.From(Users, wrapped).As("u")
+	var stats []DeptCnt
+	q := fusion.From(Users, wrapped).As("u")
+	q.Select(Users.Proto.DeptID.As("dept_id"), fusion.Count[int64]().As("cnt"))
+	q.GroupBy(Users.Proto.DeptID.GroupBy())
+	// HAVING COUNT(*) > 1（只保留工程部 dept_id=1，3人）
+	q.Having(col.CountGt(1))
+
+	if err := q.AllInto(context.Background(), &stats); err != nil {
+		t.Fatalf("having: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("got %d groups, want 1 (only 工程部 has >1)", len(stats))
+	}
+	if stats[0].DeptID != 1 || stats[0].Cnt != 3 {
+		t.Errorf("got %+v, want dept 1 cnt 3", stats[0])
+	}
+}
+
 var _ = rel.ErrNotLoaded

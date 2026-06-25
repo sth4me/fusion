@@ -305,53 +305,27 @@ func (q *Query[T]) One(ctx context.Context) (T, error) {
 	return result, nil
 }
 
-// Count 执行 SELECT COUNT(*) 查询。
+// Count 执行 SELECT COUNT(*) 查询，返回匹配 WHERE 的行数。
+// 用 builder.renderer 复用占位符/QuoteCol 逻辑（消除重复的 countRenderer）。
 func (q *Query[T]) Count(ctx context.Context) (int64, error) {
-	r := &countRenderer{d: q.d}
-	// 重新构造：SELECT COUNT(*) FROM ... WHERE ...
-	whereSQL := ""
-	if !q.where.IsZero() {
-		whereSQL = q.where.Render(r)
+	// 用 builder 的 renderer 渲染 WHERE（复用占位符与列引用）
+	sq := builder.SelectQuery{
+		SelectCols: []builder.SelectItem{col.Count[int64]()},
+		Where:      q.where,
 	}
-	sqlStr := "SELECT COUNT(*) FROM " + q.d.QuoteTable(q.table.Meta.Table)
-	if whereSQL != "" {
-		sqlStr += " WHERE " + whereSQL
-	}
+	// Count 不需要 ORDER BY/LIMIT，直接用 BuildSELECT 但只取 COUNT(*) 投影
+	sqlStr, args := builder.BuildSELECT(q.table.Meta, sq, q.d)
+	// BuildSELECT 会生成 SELECT COUNT(*) FROM ... WHERE ...，但 COUNT(*) 无 AS 别名，
+	// 扫描时按列位置取（第 1 列）。这里直接 QueryRowContext + Scan int64。
 	var n int64
 	start := time.Now()
-	row := q.execer.QueryRowContext(ctx, sqlStr, r.args...)
+	row := q.execer.QueryRowContext(ctx, sqlStr, args...)
 	if err := row.Scan(&n); err != nil {
-		logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: r.args, Duration: time.Since(start), Err: err})
+		logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), Err: err})
 		return 0, fmt.Errorf("fusion: count: %w (sql=%s)", err, sqlStr)
 	}
-	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: r.args, Duration: time.Since(start), RowsAffected: 1})
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: 1})
 	return n, nil
-}
-
-// countRenderer 仅收集 WHERE 参数（不含列引用业务，复用 expr.Renderer）。
-type countRenderer struct {
-	d    dialect.Dialect
-	phIdx int
-	args []any
-}
-
-func (c *countRenderer) NextPlaceholder() string { c.phIdx++; return c.d.Placeholder(c.phIdx) }
-func (c *countRenderer) AddParam(v any)          { c.args = append(c.args, v) }
-func (c *countRenderer) QuoteCol(tc string) string {
-	// 委托给一个临时 builder renderer 的引用逻辑
-	if i := indexByte(tc, '.'); i >= 0 {
-		return c.d.QuoteIdent(tc[:i]) + "." + c.d.QuoteIdent(tc[i+1:])
-	}
-	return c.d.QuoteIdent(tc)
-}
-
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
 }
 
 // 编译期断言：col.Order 实现 builder.OrderItem

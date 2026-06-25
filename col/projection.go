@@ -75,3 +75,15 @@ func Min[T any](c Col[T]) SelectItem {
 func Max[T any](c Col[T]) SelectItem {
 	return SelectItem{isAgg: true, funcName: "MAX", colRef: c.ref()}
 }
+
+// --- 聚合比较（用于 HAVING）---
+// 用 expr.LeafRawSQL 构造（聚合函数不 quote，直接作为左操作数）。
+
+// CountGt 生成 HAVING COUNT(*) > n。
+func CountGt(n int64) expr.Expr { return expr.LeafRawSQL("COUNT(*)", ">", n) }
+
+// CountGte 生成 HAVING COUNT(*) >= n。
+func CountGte(n int64) expr.Expr { return expr.LeafRawSQL("COUNT(*)", ">=", n) }
+
+// CountLt 生成 HAVING COUNT(*) < n。
+func CountLt(n int64) expr.Expr { return expr.LeafRawSQL("COUNT(*)", "<", n) }
