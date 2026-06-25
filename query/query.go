@@ -98,48 +98,22 @@ func (q *Query[T]) Select(items ...builder.SelectItem) *Query[T] {
 
 // Join 添加 JOIN 子句。kind 为 "INNER"/"LEFT"/"RIGHT"/"FULL"，
 // joinedTable 为已注册的 Table（TableOf 接口，如 Depts），alias 为连接表别名，
-// on 为 ON 条件构造器（在主表与连接表别名都设置后调用，确保 EqCol 引用带前缀）。
+// on 为 EqCol 组成的 ON 条件。
+//
+// 并发安全：列引用用稳定表名（注册时确定），别名在 render 时由 builder 映射替换。
+// on 可在任意时刻构造（无需先 As），因为 ref() 始终返回 "表名.列名"。
 //
 // 用法：
 //   fusion.From(Users, db).As("u").
-//       Join(fusion.InnerJoin, Depts, "d", func() expr.Expr {
-//           return Users.Proto.DeptID.EqCol(Depts.Proto.ID)
-//       })
-func (q *Query[T]) Join(kind string, joinedTable meta.TableOf, alias string, on func() expr.Expr) *Query[T] {
-	setTableAliasOnMeta(joinedTable, alias)
-	var onExpr expr.Expr
-	if on != nil {
-		onExpr = on() // 此时主表别名(As 已设)与连接表别名都已就绪
-	}
+//       Join(fusion.InnerJoin, Depts, "d", Users.Proto.DeptID.EqCol(Depts.Proto.ID))
+func (q *Query[T]) Join(kind string, joinedTable meta.TableOf, alias string, on expr.Expr) *Query[T] {
 	q.joins = append(q.joins, builder.JoinSpec{
 		Kind:  kind,
 		Table: joinedTable.ModelMeta().Table,
 		Alias: alias,
-		On:    onExpr,
+		On:    on,
 	})
 	return q
-}
-
-// setTableAliasOnMeta 反射给 TableOf 的 Proto 字段设表别名。
-// Proto 是 TableOf 实现（*Table[T]）的 Proto 字段，通过 reflect 访问。
-func setTableAliasOnMeta(tab meta.TableOf, alias string) {
-	m := tab.ModelMeta()
-	rv := reflect.ValueOf(tab)
-	if rv.Kind() == reflect.Ptr {
-		rv = rv.Elem()
-	}
-	protoField := rv.FieldByName("Proto")
-	if !protoField.IsValid() || !protoField.CanAddr() {
-		return
-	}
-	pv := protoField.Addr()
-	for i := 0; i < pv.Elem().NumField(); i++ {
-		fv := pv.Elem().Field(i).Addr().Interface()
-		if sa, ok := fv.(interface{ SetTableAlias(string) }); ok {
-			sa.SetTableAlias(alias)
-		}
-	}
-	_ = m
 }
 
 // GroupBy 添加 GROUP BY 列引用。
@@ -160,11 +134,10 @@ func (q *Query[T]) Distinct() *Query[T] {
 	return q
 }
 
-// As 设置主表别名，并同步设置 Table.Proto 的字段表别名（供 ON/投影/Where 引用）。
-// Join/聚合场景必须先调用 As 设别名，否则列引用无表前缀。
+// As 设置主表别名（仅存到 Query 实例，render 时由 builder 用 表名→别名 映射替换）。
+// 不修改全局 Proto，并发安全。Join/聚合场景需要 As 才能在 SQL 输出表别名。
 func (q *Query[T]) As(alias string) *Query[T] {
 	q.alias = alias
-	setTableAliasOnMeta(q.table, alias)
 	return q
 }
 

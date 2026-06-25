@@ -13,12 +13,15 @@ import (
 	"fusion/meta"
 )
 
-// renderer 是 expr.Renderer 的实现，绑定方言与表别名。
+// renderer 是 expr.Renderer 的实现，绑定方言与表名→别名映射。
+// 列引用形如 "表名.列名"（稳定，注册时确定），render 时表名按 aliasMap 替换为别名。
+// 若表名不在 aliasMap 中（如单表 DML），则去掉表前缀只输出列名。
+// 这样 Expr 完全不可变，别名仅在 render 时解析，并发安全。
 type renderer struct {
-	d     dialect.Dialect
-	phIdx int      // 占位符计数器
-	args  []any    // 收集的参数
-	alias string   // 当前主表别名
+	d        dialect.Dialect
+	phIdx    int               // 占位符计数器
+	args     []any             // 收集的参数
+	aliasMap map[string]string // 表名→别名（如 users→u）；表名不在 map 中则原样保留
 }
 
 func (r *renderer) NextPlaceholder() string {
@@ -28,10 +31,18 @@ func (r *renderer) NextPlaceholder() string {
 
 func (r *renderer) AddParam(v any) { r.args = append(r.args, v) }
 
-// QuoteCol 引用列引用（"t0.name" → "t0"."name"），按方言分别 quote。
+// QuoteCol 引用列引用。输入形如 "表名.列名" 或 "列名"。
+//   - 表名在 aliasMap 中：替换为别名（如 users.name → u.name）
+//   - 表名不在 aliasMap 中（单表场景）：去掉表前缀，只输出列名（避免 users.id 在单表 UPDATE 报错）
 func (r *renderer) QuoteCol(tableCol string) string {
 	if i := strings.IndexByte(tableCol, '.'); i >= 0 {
-		return r.d.QuoteIdent(tableCol[:i]) + "." + r.d.QuoteIdent(tableCol[i+1:])
+		left := tableCol[:i]
+		col := tableCol[i+1:]
+		if alias, ok := r.aliasMap[left]; ok {
+			return r.d.QuoteIdent(alias) + "." + r.d.QuoteIdent(col)
+		}
+		// 表名无别名映射：只输出列名（单表场景）
+		return r.d.QuoteIdent(col)
 	}
 	return r.d.QuoteIdent(tableCol)
 }
@@ -79,8 +90,19 @@ type SelectQuery struct {
 
 // BuildSELECT 生成 SELECT 语句的 (SQL, args)。
 // m 提供列名列表（仅当 SelectCols 为空时用于整表投影）；d 提供方言。
+// q.Alias 主表别名 + q.Joins 各连接表别名 → 构造 表名→别名 映射供 renderer 替换。
 func BuildSELECT(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, []any) {
-	r := &renderer{d: d, alias: q.Alias}
+	// 构造 表名→别名 映射
+	aliasMap := map[string]string{}
+	if q.Alias != "" {
+		aliasMap[m.Table] = q.Alias // 主表
+	}
+	for _, j := range q.Joins {
+		if j.Alias != "" {
+			aliasMap[j.Table] = j.Alias
+		}
+	}
+	r := &renderer{d: d, aliasMap: aliasMap}
 
 	// SELECT 列：有 SelectCols 用投影项，否则整表所有列（向后兼容）
 	var colParts []string
@@ -92,11 +114,11 @@ func BuildSELECT(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, [
 	} else {
 		colParts = make([]string, 0, len(m.Fields))
 		for _, f := range m.Fields {
-			ref := f.Column
-			if q.Alias != "" {
-				ref = q.Alias + "." + f.Column
+			if f.IsRelation {
+				continue
 			}
-			colParts = append(colParts, r.QuoteCol(ref))
+			// 用稳定的 表名.列名，renderer 的 QuoteCol 会按 aliasMap 替换表名为别名
+			colParts = append(colParts, r.QuoteCol(f.Table+"."+f.Column))
 		}
 	}
 

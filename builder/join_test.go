@@ -26,10 +26,7 @@ func jDeptTab() *meta.Table[jDept] { return meta.Register[jDept]("jdepts") }
 func TestBuildJoin(t *testing.T) {
 	Users := jUserTab()
 	Depts := jDeptTab()
-	// 模拟 query 层给 Proto 设表别名
-	Users.Proto.ID.SetTableAlias("t0")
-	Users.Proto.DeptID.SetTableAlias("t0")
-	Depts.Proto.ID.SetTableAlias("t1")
+	// 列引用现在是稳定的 表名.列名（注册时确定），无需手动设别名
 	u := Users.Proto
 	d := Depts.Proto
 
@@ -62,6 +59,7 @@ func TestBuildSelectProjection(t *testing.T) {
 	d := Depts.Proto
 
 	sqlStr, _ := BuildSELECT(Users.Meta, SelectQuery{
+		Alias: "t0", // 主表别名，使 jusers→t0 映射生效
 		SelectCols: []SelectItem{
 			u.Name.As("user_name"),
 			d.Name.As("dept_name"),
@@ -71,7 +69,7 @@ func TestBuildSelectProjection(t *testing.T) {
 		},
 	}, dialect.PostgresDialect)
 
-	if !strings.Contains(sqlStr, `SELECT "name" AS user_name, "name" AS dept_name`) {
+	if !strings.Contains(sqlStr, `SELECT "t0"."name" AS user_name, "t1"."name" AS dept_name`) {
 		t.Errorf("projection got %q", sqlStr)
 	}
 }

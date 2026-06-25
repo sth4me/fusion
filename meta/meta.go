@@ -20,8 +20,13 @@ type FieldMeta struct {
 	FieldName string
 	// Column 是数据库列名（默认由字段名蛇形化得到，可被覆盖）。
 	Column string
+	// Table 是字段所属的数据库表名（注册时填充，不可变）。
+	// 用于生成稳定的列引用 "表名.列名"，别名在 render 时由 builder 映射替换（并发安全）。
+	Table string
 	// IsRelation 标记是否为关联字段（Col=false，Rel/RelMany=true）。
 	IsRelation bool
+	// IsPrimaryKey 标记是否为主键（首个非关联字段，或 db:"pk" tag 指定）。
+	IsPrimaryKey bool
 }
 
 // FieldDescriptor 由 Col[T]/Rel[T] 等字段类型实现，供 Register 反射填充元数据。
@@ -126,6 +131,7 @@ func Register[T any](name string) *Table[T] {
 	rv := reflect.ValueOf(proto).Elem()
 
 	fields := []FieldMeta{}
+	pkAssigned := false
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
 		if !f.IsExported() {
@@ -133,13 +139,25 @@ func Register[T any](name string) *Table[T] {
 		}
 		// 解析 db 标签覆盖列名（可选，与"少用 tag"理念并存：默认零标签）。
 		col := f.Tag.Get("db")
+		// db:"pk" 标记主键（可选）；db:"colname" 指定列名
+		isPK := false
+		if col == "pk" {
+			isPK = true
+			col = snake(f.Name)
+		}
 		if col == "" {
 			col = snake(f.Name)
 		}
 		fm := FieldMeta{
 			FieldName:  f.Name,
 			Column:     col,
+			Table:      name,
 			IsRelation: isRelationType(f.Type),
+		}
+		// 主键约定：显式 db:"pk" 优先；否则首个非关联字段为主键
+		if !pkAssigned && isPK {
+			fm.IsPrimaryKey = true
+			pkAssigned = true
 		}
 		fields = append(fields, fm)
 		t.Meta.byName[f.Name] = &fields[len(fields)-1]
@@ -150,6 +168,22 @@ func Register[T any](name string) *Table[T] {
 		if fv.CanAddr() {
 			if d, ok := fv.Addr().Interface().(FieldDescriptor); ok {
 				d.SetMeta(fm)
+			}
+		}
+	}
+	// 若无显式主键标记，首个非关联字段约定为主键
+	if !pkAssigned {
+		for i := range fields {
+			if !fields[i].IsRelation {
+				fields[i].IsPrimaryKey = true
+				// 同步更新 byName/byCol 的指针（fields 是切片，元素已拷贝；需更新缓存指针指向的值）
+				if ptr := t.Meta.byName[fields[i].FieldName]; ptr != nil {
+					ptr.IsPrimaryKey = true
+				}
+				if ptr := t.Meta.byCol[fields[i].Column]; ptr != nil {
+					ptr.IsPrimaryKey = true
+				}
+				break
 			}
 		}
 	}

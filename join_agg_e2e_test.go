@@ -8,7 +8,6 @@ import (
 	"fusion"
 	"fusion/col"
 	"fusion/dialect"
-	"fusion/expr"
 	"fusion/rel"
 )
 
@@ -59,10 +58,7 @@ func TestJoin_Projection(t *testing.T) {
 
 	var view []UserDeptView
 	q := fusion.From(Users, wrapped).As("u")
-	q.Join(fusion.InnerJoin, Depts, "d", func() expr.Expr {
-		return Users.Proto.DeptID.EqCol(Depts.Proto.ID)
-	})
-	// Select 也需在别名设好后构造（Proto.Name 此时带别名）
+	q.Join(fusion.InnerJoin, Depts, "d", Users.Proto.DeptID.EqCol(Depts.Proto.ID))
 	q.Select(Users.Proto.Name.As("user_name"), Depts.Proto.Name.As("dept_name"))
 
 	if err := q.AllInto(context.Background(), &view); err != nil {
@@ -142,9 +138,7 @@ func TestLeftJoin(t *testing.T) {
 
 	var view []UserDeptView
 	q := fusion.From(Users, wrapped).As("u")
-	q.Join(fusion.LeftJoin, Depts, "d", func() expr.Expr {
-		return Users.Proto.DeptID.EqCol(Depts.Proto.ID)
-	})
+	q.Join(fusion.LeftJoin, Depts, "d", Users.Proto.DeptID.EqCol(Depts.Proto.ID))
 	q.Select(Users.Proto.Name.As("user_name"), Depts.Proto.Name.As("dept_name"))
 
 	if err := q.AllInto(context.Background(), &view); err != nil {
@@ -179,8 +173,7 @@ func TestCount(t *testing.T) {
 		t.Errorf("count all got %d, want 4", n)
 	}
 
-	// 带 WHERE 计数
-	Users.Proto.DeptID.SetTableAlias("")
+	// 带 WHERE 计数（列引用用稳定表名，无需手动清别名）
 	n2, err := fusion.From(Users, wrapped).
 		Where(Users.Proto.DeptID.Eq(1)).
 		Count(context.Background())

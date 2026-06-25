@@ -28,13 +28,15 @@ type Col[T any] struct {
 
 // --- meta.FieldDescriptor 实现 ---
 
-// SetMeta 由 meta.Register 反射调用，填充列名。表别名在 builder 渲染时再设置。
+// SetMeta 由 meta.Register 反射调用，填充列名与表名。
+// table 存储稳定的表名（注册时确定，不可变），别名在 render 时由 builder 映射替换。
 func (c *Col[T]) SetMeta(m meta.FieldMeta) {
 	c.col = m.Column
+	c.table = m.Table
 }
 
-// SetTableAlias 由 builder 在渲染前设置表别名。
-func (c *Col[T]) SetTableAlias(alias string) { c.table = alias }
+// TableName 返回字段所属表名（注册时填充，稳定不变）。
+func (c *Col[T]) TableName() string { return c.table }
 
 // --- 读写访问（见 #3） ---
 

@@ -61,13 +61,10 @@ func TestSnakeColumn(t *testing.T) {
 // TestCompareExprs 验证比较方法生成的 Expr（列名由 renderer quote）
 func TestCompareExprs(t *testing.T) {
 	tab := meta.Register[TestUser]("test_users")
-	// 设置表别名模拟 builder
-	tab.Proto.Name.SetTableAlias("t0")
-	tab.Proto.Age.SetTableAlias("t0")
-
+	// 列引用现在是稳定的 表名.列名（注册时确定，无 SetTableAlias）
 	e := tab.Proto.Name.Eq("alice")
 	s := renderExpr(e)
-	want := "`t0`.`name` = ?"
+	want := "`test_users`.`name` = ?"
 	if s != want {
 		t.Errorf("Eq got %q, want %q", s, want)
 	}

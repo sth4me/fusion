@@ -26,7 +26,7 @@ type InsertQuery struct {
 // values 是按 Cols 顺序对应的 SQL 值（已做 NULL/指针转换）。
 // 返回的 args 不含 RETURNING 的值（RETURNING 不需要参数）。
 func BuildINSERT(m *meta.ModelMeta, q InsertQuery, values []any, d dialect.Dialect) (string, []any) {
-	r := &renderer{d: d}
+	r := &renderer{d: d, aliasMap: map[string]string{}}
 	ph := make([]string, len(q.Cols))
 	args := make([]any, 0, len(values))
 	for i := range q.Cols {
@@ -61,7 +61,7 @@ type UpdateQuery struct {
 // BuildUPDATE 生成 UPDATE 语句的 (SQL, args)。
 // values 是按 SetCols 顺序对应的 SQL 值。
 func BuildUPDATE(m *meta.ModelMeta, q UpdateQuery, values []any, d dialect.Dialect) (string, []any) {
-	r := &renderer{d: d}
+	r := &renderer{d: d, aliasMap: map[string]string{}}
 	sets := make([]string, len(q.SetCols))
 	args := make([]any, 0, len(values)+2)
 	for i := range q.SetCols {
@@ -87,7 +87,7 @@ type DeleteQuery struct {
 
 // BuildDELETE 生成 DELETE 语句。
 func BuildDELETE(m *meta.ModelMeta, q DeleteQuery, d dialect.Dialect) (string, []any) {
-	r := &renderer{d: d}
+	r := &renderer{d: d, aliasMap: map[string]string{}}
 	sql := "DELETE FROM " + d.QuoteTable(m.Table)
 	if !q.Where.IsZero() {
 		where := q.Where.Render(r)

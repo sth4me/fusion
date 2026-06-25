@@ -171,14 +171,13 @@ func TestIsZero(t *testing.T) {
 	}
 }
 
-func TestSetTableAlias(t *testing.T) {
+// TestTableName 验证 TableName 返回注册时填的表名（替代已删的 SetTableAlias）
+func TestTableName(t *testing.T) {
 	var c Col[int]
 	c.col = "id"
-	c.SetTableAlias("u")
-	r := &r2{}
-	s := c.Eq(1).Render(r)
-	if s != "`u`.`id` = ?" {
-		t.Errorf("got %q", s)
+	c.table = "users"
+	if c.TableName() != "users" {
+		t.Errorf("got %q, want users", c.TableName())
 	}
 }
 
