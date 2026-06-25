@@ -18,10 +18,11 @@ import (
 // 若表名不在 aliasMap 中（如单表 DML），则去掉表前缀只输出列名。
 // 这样 Expr 完全不可变，别名仅在 render 时解析，并发安全。
 type renderer struct {
-	d        dialect.Dialect
-	phIdx    int               // 占位符计数器
-	args     []any             // 收集的参数
-	aliasMap map[string]string // 表名→别名（如 users→u）；表名不在 map 中则原样保留
+	d          dialect.Dialect
+	phIdx      int               // 占位符计数器
+	args       []any             // 收集的参数
+	aliasMap   map[string]string // 表名→别名（如 users→u）
+	keepPrefix bool              // true=保留未知表前缀（子查询引用外层表用）
 }
 
 func (r *renderer) NextPlaceholder() string {
@@ -41,7 +42,12 @@ func (r *renderer) QuoteCol(tableCol string) string {
 		if alias, ok := r.aliasMap[left]; ok {
 			return r.d.QuoteIdent(alias) + "." + r.d.QuoteIdent(col)
 		}
-		// 表名无别名映射：只输出列名（单表场景）
+		// 表名无别名映射
+		if r.keepPrefix {
+			// 子查询场景：保留表前缀（引用外层表）
+			return r.d.QuoteIdent(left) + "." + r.d.QuoteIdent(col)
+		}
+		// 单表场景：去前缀只输出列名
 		return r.d.QuoteIdent(col)
 	}
 	return r.d.QuoteIdent(tableCol)
@@ -86,16 +92,32 @@ type SelectQuery struct {
 	Distinct   bool
 	Limit      int
 	Offset     int
+	LockClause string        // 锁子句（"FOR UPDATE"/"FOR SHARE"/"FOR UPDATE NOWAIT"等，空=无锁）
+}
+
+// BuildSubquerySQL 生成子查询 SQL（keepPrefix=true，保留外层表引用）。
+// 供 EXISTS/IN 子查询用。
+func BuildSubquerySQL(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, []any) {
+	aliasMap := map[string]string{}
+	if q.Alias != "" {
+		aliasMap[m.Table] = q.Alias
+	}
+	for _, j := range q.Joins {
+		if j.Alias != "" {
+			aliasMap[j.Table] = j.Alias
+		}
+	}
+	r := &renderer{d: d, aliasMap: aliasMap, keepPrefix: true}
+	return buildSelectBody(r, m, q, d), r.args
 }
 
 // BuildSELECT 生成 SELECT 语句的 (SQL, args)。
 // m 提供列名列表（仅当 SelectCols 为空时用于整表投影）；d 提供方言。
 // q.Alias 主表别名 + q.Joins 各连接表别名 → 构造 表名→别名 映射供 renderer 替换。
 func BuildSELECT(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, []any) {
-	// 构造 表名→别名 映射
 	aliasMap := map[string]string{}
 	if q.Alias != "" {
-		aliasMap[m.Table] = q.Alias // 主表
+		aliasMap[m.Table] = q.Alias
 	}
 	for _, j := range q.Joins {
 		if j.Alias != "" {
@@ -103,6 +125,13 @@ func BuildSELECT(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, [
 		}
 	}
 	r := &renderer{d: d, aliasMap: aliasMap}
+	return buildSelectBody(r, m, q, d), r.args
+}
+
+// buildSelectBody 用给定 renderer 生成 SELECT 语句主体（不含参数返回，参数在 r.args）。
+func buildSelectBody(r *renderer, m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) string {
+	// renderer 已绑定方言（r.d），统一用它（兼容 d 参数为 nil 的子查询场景）
+	di := r.d
 
 	// SELECT 列：有 SelectCols 用投影项，否则整表所有列（向后兼容）
 	var colParts []string
@@ -126,16 +155,16 @@ func BuildSELECT(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, [
 	if q.Distinct {
 		prefix = "SELECT DISTINCT "
 	}
-	sql := prefix + strings.Join(colParts, ", ") + " FROM " + d.QuoteTable(m.Table)
+	sql := prefix + strings.Join(colParts, ", ") + " FROM " + di.QuoteTable(m.Table)
 	if q.Alias != "" {
-		sql += " AS " + d.QuoteIdent(q.Alias)
+		sql += " AS " + di.QuoteIdent(q.Alias)
 	}
 
 	// JOIN
 	for _, j := range q.Joins {
-		sql += " " + j.Kind + " JOIN " + d.QuoteTable(j.Table)
+		sql += " " + j.Kind + " JOIN " + di.QuoteTable(j.Table)
 		if j.Alias != "" {
-			sql += " AS " + d.QuoteIdent(j.Alias)
+			sql += " AS " + di.QuoteIdent(j.Alias)
 		}
 		if !j.On.IsZero() {
 			sql += " ON " + j.On.Render(r)
@@ -178,15 +207,20 @@ func BuildSELECT(m *meta.ModelMeta, q SelectQuery, d dialect.Dialect) (string, [
 
 	// LIMIT / OFFSET
 	if q.Limit > 0 {
-		sql += " LIMIT " + d.Placeholder(r.phIdx+1)
+		sql += " LIMIT " + di.Placeholder(r.phIdx+1)
 		r.phIdx++
 		r.args = append(r.args, q.Limit)
 	}
 	if q.Offset > 0 {
-		sql += " OFFSET " + d.Placeholder(r.phIdx+1)
+		sql += " OFFSET " + di.Placeholder(r.phIdx+1)
 		r.phIdx++
 		r.args = append(r.args, q.Offset)
 	}
 
-	return sql, r.args
+	// 锁子句（FOR UPDATE/FOR SHARE，在 LIMIT 之后）
+	if q.LockClause != "" {
+		sql += " " + q.LockClause
+	}
+
+	return sql
 }

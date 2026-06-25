@@ -16,6 +16,7 @@ import (
 	"fusion/hook"
 	"fusion/logging"
 	"fusion/meta"
+	"fusion/expr"
 	"fusion/relation"
 	"fusion/query"
 	"fusion/scan"
@@ -33,6 +34,17 @@ func DefaultDialect() dialect.Dialect { return defaultDialect }
 
 // DB 是执行查询所需的最小接口（*sql.DB / *sql.Tx 满足）。
 type DB = query.QueryExecer
+
+// Open 打开数据库连接，返回原始 *sql.DB（供 Close/Ping）和 ctx 感知的 DB。
+// d 作为全局默认方言（调 SetDefaultDialect）。
+func Open(driverName, dsn string, d dialect.Dialect) (*sql.DB, DB, error) {
+	db, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	SetDefaultDialect(d)
+	return db, WrapDB(db), nil
+}
 
 // Register 注册模型并返回 Table[T]。name 为表名（空则用类型名蛇形化）。
 // 默认用 DefaultDialect。
@@ -91,6 +103,11 @@ func Delete[T any](t *meta.Table[T], db DB) *query.Deleter[T] {
 // DeleteDialect 同 Delete，但指定方言。
 func DeleteDialect[T any](t *meta.Table[T], db DB, d dialect.Dialect) *query.Deleter[T] {
 	return query.NewDelete[T](t, d, db)
+}
+
+// DeleteByID 按主键删除单条（无需手动 Where）。
+func DeleteByID[T any](t *meta.Table[T], db DB, id any) *query.Deleter[T] {
+	return query.NewDeleteByID[T](t, defaultDialect, db, id)
 }
 
 // Raw 执行原始 SQL，扫描进 *[]T。out 必须指向已注册模型类型的切片。
@@ -249,4 +266,17 @@ func Min[T any](c col.Col[T]) col.SelectItem { return col.Min[T](c) }
 
 // Max 聚合函数。
 func Max[T any](c col.Col[T]) col.SelectItem { return col.Max[T](c) }
+
+// --- 子查询（见 docs/DESIGN.md）---
+// 子查询接受 Query 对象（实现 SubqueryProvider），自动 build 子 SQL，
+// 参数并入外层，占位符自动重写，零字符串硬编码。
+
+// SubqueryProvider 子查询提供者接口（Query 实现）。
+type SubqueryProvider = expr.SubqueryProvider
+
+// Exists 生成 EXISTS 子查询表达式。
+func Exists(sub SubqueryProvider) expr.Expr { return expr.Exists(sub) }
+
+// NotExists 生成 NOT EXISTS 子查询表达式。
+func NotExists(sub SubqueryProvider) expr.Expr { return expr.NotExists(sub) }
 

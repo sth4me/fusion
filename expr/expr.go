@@ -168,9 +168,27 @@ func LeafRawSQL(leftExpr, op string, param any) Expr {
 	return Expr{n: rawLeafNode{left: leftExpr, op: op, param: param}}
 }
 
-// LeafBetween 生成 BETWEEN 表达式（col BETWEEN $1 AND $2）。
-func LeafBetween(col string, lo, hi any) Expr {
-	return Expr{n: betweenNode{col: col, lo: lo, hi: hi}}
+// LeafBetween 生成 BETWEEN/NOT BETWEEN 表达式。
+func LeafBetween(col string, lo, hi any, negate bool) Expr {
+	return Expr{n: betweenNode{col: col, lo: lo, hi: hi, negate: negate}}
+}
+
+// betweenNode 是 BETWEEN 的载体。
+type betweenNode struct {
+	col    string
+	lo, hi any
+	negate bool
+}
+
+func (betweenNode) kind() nodeKind { return kindLeaf }
+func (b betweenNode) render(_ nodeKind, d Renderer) string {
+	d.AddParam(b.lo)
+	d.AddParam(b.hi)
+	op := "BETWEEN"
+	if b.negate {
+		op = "NOT BETWEEN"
+	}
+	return d.QuoteCol(b.col) + " " + op + " " + d.NextPlaceholder() + " AND " + d.NextPlaceholder()
 }
 
 // rawLeafNode 是原始左操作数的叶节点（不 quote，用于聚合函数）。
@@ -178,20 +196,6 @@ type rawLeafNode struct {
 	left  string // 原始 SQL 片段（如 "COUNT(*)"），不 quote
 	op    string
 	param any
-}
-
-// betweenNode 是 BETWEEN 的载体。
-type betweenNode struct {
-	col string
-	lo  any
-	hi  any
-}
-
-func (betweenNode) kind() nodeKind { return kindLeaf }
-func (b betweenNode) render(_ nodeKind, d Renderer) string {
-	d.AddParam(b.lo)
-	d.AddParam(b.hi)
-	return d.QuoteCol(b.col) + " BETWEEN " + d.NextPlaceholder() + " AND " + d.NextPlaceholder()
 }
 
 func (rawLeafNode) kind() nodeKind { return kindLeaf }
@@ -260,4 +264,98 @@ func joinStrings(parts []string, sep string) string {
 		out += sep + p
 	}
 	return out
+}
+
+// SubqueryProvider 由能生成子查询 SQL 的对象实现（如 query.Query）。
+// BuildSubquery 返回子查询 SQL（不含外层括号）和参数；
+// 参数由调用方（subqueryNode.render）并入外层 Renderer，占位符自动重写。
+type SubqueryProvider interface {
+	// SubquerySQL 返回子查询 SQL 和参数（参数顺序与 SQL 中占位符顺序一致）。
+	SubquerySQL() (sql string, args []any)
+}
+
+// Exists 生成 EXISTS 子查询表达式。
+// sub 为实现了 SubqueryProvider 的对象（如 query.Query）。
+func Exists(sub SubqueryProvider) Expr {
+	return Expr{n: subqueryNode{provider: sub, opKind: "EXISTS", negate: false}}
+}
+
+// NotExists 生成 NOT EXISTS 子查询表达式。
+func NotExists(sub SubqueryProvider) Expr {
+	return Expr{n: subqueryNode{provider: sub, opKind: "EXISTS", negate: true}}
+}
+
+// InSubquery 生成 col IN (子查询) 表达式。
+func InSubquery(col string, sub SubqueryProvider) Expr {
+	return Expr{n: subqueryNode{provider: sub, opKind: "IN", col: col, negate: false}}
+}
+
+// NotInSubquery 生成 col NOT IN (子查询) 表达式。
+func NotInSubquery(col string, sub SubqueryProvider) Expr {
+	return Expr{n: subqueryNode{provider: sub, opKind: "IN", col: col, negate: true}}
+}
+
+// subqueryNode 是子查询节点（EXISTS / IN 子查询）。
+type subqueryNode struct {
+	provider SubqueryProvider
+	opKind   string // "EXISTS" 或 "IN"
+	col      string // IN 子查询的列引用
+	negate   bool
+}
+
+func (subqueryNode) kind() nodeKind { return kindLeaf }
+
+func (s subqueryNode) render(_ nodeKind, d Renderer) string {
+	subSQL, args := s.provider.SubquerySQL()
+	rewritten := rewritePlaceholders(subSQL, args, d)
+	if s.opKind == "EXISTS" {
+		if s.negate {
+			return "NOT EXISTS (" + rewritten + ")"
+		}
+		return "EXISTS (" + rewritten + ")"
+	}
+	// IN 子查询
+	op := "IN"
+	if s.negate {
+		op = "NOT IN"
+	}
+	return d.QuoteCol(s.col) + " " + op + " (" + rewritten + ")"
+}
+
+// rewritePlaceholders 把子查询 SQL 中的占位符（? 或 $N）逐个替换为外层
+// Renderer 的 NextPlaceholder()，同时通过 AddParam 把对应参数并入外层。
+// 子查询 SQL 和 args 的占位符顺序必须一致（由 builder 保证）。
+func rewritePlaceholders(subSQL string, args []any, d Renderer) string {
+	out := make([]byte, 0, len(subSQL)+len(args)*4)
+	argIdx := 0
+	for i := 0; i < len(subSQL); {
+		c := subSQL[i]
+		if c == '?' {
+			// MySQL/SQLite 风格占位符
+			if argIdx < len(args) {
+				d.AddParam(args[argIdx])
+				argIdx++
+			}
+			out = append(out, []byte(d.NextPlaceholder())...)
+			i++
+			continue
+		}
+		if c == '$' && i+1 < len(subSQL) && subSQL[i+1] >= '0' && subSQL[i+1] <= '9' {
+			// PostgreSQL 风格 $N 占位符
+			j := i + 1
+			for j < len(subSQL) && subSQL[j] >= '0' && subSQL[j] <= '9' {
+				j++
+			}
+			if argIdx < len(args) {
+				d.AddParam(args[argIdx])
+				argIdx++
+			}
+			out = append(out, []byte(d.NextPlaceholder())...)
+			i = j
+			continue
+		}
+		out = append(out, c)
+		i++
+	}
+	return string(out)
 }

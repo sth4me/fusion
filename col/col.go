@@ -115,6 +115,14 @@ func (c Col[T]) Like(v T) expr.Expr { return c.compareExpr("LIKE", v) }
 // NotLike 生成不匹配表达式（NOT LIKE）。
 func (c Col[T]) NotLike(v T) expr.Expr { return c.compareExpr("NOT LIKE", v) }
 
+// EqDistinct 生成 NULL 安全等于（IS NOT DISTINCT FROM）。
+// 与 Eq 不同：当值为 NULL 时，Eq 生成 "col = NULL"（永假），EqDistinct 正确匹配 NULL。
+// PG/SQLite 原生支持；MySQL 不支持 IS NOT DISTINCT FROM（文档注明回退到 <=>）。
+func (c Col[T]) EqDistinct(v T) expr.Expr { return c.compareExpr("IS NOT DISTINCT FROM", v) }
+
+// NeDistinct 生成 NULL 安全不等（IS DISTINCT FROM）。
+func (c Col[T]) NeDistinct(v T) expr.Expr { return c.compareExpr("IS DISTINCT FROM", v) }
+
 // In 生成 IN 表达式。
 func (c Col[T]) In(vs []T) expr.Expr {
 	args := make([]any, len(vs))
@@ -124,9 +132,23 @@ func (c Col[T]) In(vs []T) expr.Expr {
 	return expr.LeafMulti(c.ref(), "IN", args)
 }
 
+// NotIn 生成 NOT IN 表达式。
+func (c Col[T]) NotIn(vs []T) expr.Expr {
+	args := make([]any, len(vs))
+	for i, v := range vs {
+		args[i] = v
+	}
+	return expr.LeafMulti(c.ref(), "NOT IN", args)
+}
+
 // Between 生成区间表达式（col BETWEEN lo AND hi）。
 func (c Col[T]) Between(lo, hi T) expr.Expr {
-	return expr.LeafBetween(c.ref(), lo, hi)
+	return expr.LeafBetween(c.ref(), lo, hi, false)
+}
+
+// NotBetween 生成 NOT BETWEEN 表达式。
+func (c Col[T]) NotBetween(lo, hi T) expr.Expr {
+	return expr.LeafBetween(c.ref(), lo, hi, true)
 }
 
 // IsNull 生成 IS NULL 表达式。

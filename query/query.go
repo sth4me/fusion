@@ -46,6 +46,7 @@ type Query[T any] struct {
 	having     expr.Expr            // HAVING
 	distinct   bool
 	alias      string               // 主表别名（Join/投影场景需要）
+	lockClause string               // 锁子句（FOR UPDATE 等）
 }
 
 // QueryExecer 抽象执行 SQL 的能力（*sql.DB 或 *sql.Tx 都满足）。
@@ -139,6 +140,24 @@ func (q *Query[T]) Distinct() *Query[T] {
 	return q
 }
 
+// ForUpdate 加 FOR UPDATE 锁子句（事务内悲观锁）。
+func (q *Query[T]) ForUpdate() *Query[T] {
+	q.lockClause = "FOR UPDATE"
+	return q
+}
+
+// ForShare 加 FOR SHARE 锁子句。
+func (q *Query[T]) ForShare() *Query[T] {
+	q.lockClause = "FOR SHARE"
+	return q
+}
+
+// ForUpdateNoWait 加 FOR UPDATE NOWAIT（锁失败立即报错）。
+func (q *Query[T]) ForUpdateNoWait() *Query[T] {
+	q.lockClause = "FOR UPDATE NOWAIT"
+	return q
+}
+
 // As 设置主表别名（仅存到 Query 实例，render 时由 builder 用 表名→别名 映射替换）。
 // 不修改全局 Proto，并发安全。Join/聚合场景需要 As 才能在 SQL 输出表别名。
 func (q *Query[T]) As(alias string) *Query[T] {
@@ -159,6 +178,7 @@ func (q *Query[T]) buildSelectQuery() builder.SelectQuery {
 		Distinct:   q.distinct,
 		Limit:      q.limit,
 		Offset:     q.offset,
+		LockClause: q.lockClause,
 	}
 }
 
@@ -285,6 +305,13 @@ func (q *Query[T]) One(ctx context.Context) (T, error) {
 		result = single[0]
 	}
 	return result, nil
+}
+
+// SubquerySQL 生成子查询 SQL（不含外层括号）+ 参数，供 EXISTS/IN 子查询用。
+// 实现 expr.SubqueryProvider。占位符由外层 render 时重写（参数并入外层）。
+func (q *Query[T]) SubquerySQL() (string, []any) {
+	sq := q.buildSelectQuery()
+	return builder.BuildSubquerySQL(q.table.Meta, sq, q.d)
 }
 
 // Count 执行 SELECT COUNT(*) 查询，返回匹配 WHERE 的行数。

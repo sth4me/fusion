@@ -40,6 +40,35 @@ func (s SelectItem) RenderSelect(d expr.Renderer) string {
 	return out
 }
 
+// RenderClause 实现 builder.OrderItem（聚合/列可用于 ORDER BY，无 AS）。
+func (s SelectItem) RenderClause(d expr.Renderer) string {
+	if s.isAgg {
+		inner := s.colRef
+		if inner != "*" {
+			inner = d.QuoteCol(inner)
+		}
+		return s.funcName + "(" + inner + ")"
+	}
+	return d.QuoteCol(s.colRef)
+}
+
+// AggOrder 是聚合排序项（携带方向），实现 builder.OrderItem。
+type AggOrder struct {
+	item SelectItem
+	dir  string
+}
+
+// Asc 聚合升序（如 ORDER BY COUNT(*) ASC）。
+func (s SelectItem) Asc() AggOrder { return AggOrder{item: s, dir: "ASC"} }
+
+// Desc 聚合降序（如 ORDER BY COUNT(*) DESC）。
+func (s SelectItem) Desc() AggOrder { return AggOrder{item: s, dir: "DESC"} }
+
+// RenderClause 实现 builder.OrderItem。
+func (a AggOrder) RenderClause(d expr.Renderer) string {
+	return a.item.RenderClause(d) + " " + a.dir
+}
+
 // Col.As 生成普通列投影。
 // alias 为 AS 别名（应与投影结构体字段的 db tag 或蛇形名对齐）。
 func (c Col[T]) As(alias string) SelectItem {

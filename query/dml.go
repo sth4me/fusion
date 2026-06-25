@@ -501,6 +501,12 @@ func NewDelete[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer) *
 	return &Deleter[T]{table: t, d: d, execer: execer}
 }
 
+// NewDeleteByID 构造按主键删除的 Deleter（无需手动 Where）。
+func NewDeleteByID[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer, id any) *Deleter[T] {
+	pkCol := primaryKeyColumn(t.Meta)
+	return &Deleter[T]{table: t, d: d, execer: execer, where: expr.LeafParam(pkCol, "=", id)}
+}
+
 // Where 设置删除条件。
 func (d *Deleter[T]) Where(e expr.Expr) *Deleter[T] {
 	d.where = e
