@@ -58,6 +58,10 @@ func (r *Rel[T]) setLoad(v *T) {
 	r.loaded = true
 }
 
+// SetLoad 是 setLoad 的导出包装，供 relation 包通过反射/接口回填。
+// （reflect 无法调用未导出方法，故提供导出入口。）
+func (r *Rel[T]) SetLoad(v *T) { r.setLoad(v) }
+
 // MarshalJSON 实现 JSON 透明序列化：未加载或 nil → null；有值 → 序列化值。
 func (r Rel[T]) MarshalJSON() ([]byte, error) {
 	if r.val == nil {
@@ -122,6 +126,9 @@ func (r *RelMany[T]) setLoad(v []T) {
 	r.val = v
 	r.loaded = true
 }
+
+// SetLoad 是 setLoad 的导出包装，供 relation 包回填。
+func (r *RelMany[T]) SetLoad(v []T) { r.setLoad(v) }
 
 // MarshalJSON 实现 JSON 透明序列化：未加载 → null；有值 → 序列化切片。
 func (r RelMany[T]) MarshalJSON() ([]byte, error) {

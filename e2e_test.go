@@ -22,12 +22,15 @@ type User struct {
 }
 
 // openSQLite 打开内存 SQLite 数据库并建表。
+// SQLite 的 :memory: 每个连接是独立实例，故 SetMaxOpenConns(1) 确保所有查询
+// （含 Preload 子查询）共用同一实例。
 func openSQLite(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	db.SetMaxOpenConns(1)
 	// 建表（手工 DDL，阶段0不做迁移）
 	ddl := `CREATE TABLE users (
 		id INTEGER PRIMARY KEY,

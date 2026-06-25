@@ -15,6 +15,7 @@ import (
 	"fusion/hook"
 	"fusion/logging"
 	"fusion/meta"
+	"fusion/relation"
 	"fusion/query"
 	"fusion/scan"
 	"fusion/tx"
@@ -170,4 +171,40 @@ func AddQueryHook(h QueryHook) (unregister func()) { return logging.AddQueryHook
 
 // SetSlowThreshold 设置慢查询阈值（默认 200ms）。超过则 Warn 级记录。
 func SetSlowThreshold(d time.Duration) { logging.SetSlowThreshold(d) }
+
+// --- 关联注册（见 docs/DESIGN.md 决策 5、#2、#7）---
+//
+// 用回调式取字段（func(u *User) any { return &u.Posts }），完全类型安全零字符串。
+// 注册一次后，Preload("Posts") 即可预加载。
+
+// HasMany 注册一对多关联（如 User→Posts）。
+//   - relField:  func(u *User) any { return &u.Posts }
+//   - childFK:   func(p *Post) any { return &p.UID }（子表外键）
+//   - parentRef: func(u *User) any { return &u.ID }（父主键）
+func HasMany(relField, childFK, parentRef any) *relation.RelMeta {
+	return relation.HasMany(relField, childFK, parentRef)
+}
+
+// HasOne 注册一对一关联。
+func HasOne(relField, childFK, parentRef any) *relation.RelMeta {
+	return relation.HasOne(relField, childFK, parentRef)
+}
+
+// BelongsTo 注册多对一关联（如 User→Dept）。
+//   - relField:  func(u *User) any { return &u.Dept }
+//   - parentFK:  func(u *User) any { return &u.DeptID }（父表外键）
+//   - ref:       func(d *Dept) any { return &d.ID }（引用表主键）
+func BelongsTo(relField, parentFK, ref any) *relation.RelMeta {
+	return relation.BelongsTo(relField, parentFK, ref)
+}
+
+// ManyToMany 注册多对多关联（如 User↔Posts 经连接表）。
+//   - relField:    func(u *User) any { return &u.Posts }
+//   - joinLeftFK:  func(j *UserPost) any { return &j.UserID }
+//   - joinRightFK: func(j *UserPost) any { return &j.PostID }
+//   - parentRef:   func(u *User) any { return &u.ID }
+//   - childRef:    func(p *Post) any { return &p.ID }
+func ManyToMany(relField, joinLeftFK, joinRightFK, parentRef, childRef any) *relation.RelMeta {
+	return relation.ManyToMany(relField, joinLeftFK, joinRightFK, parentRef, childRef)
+}
 

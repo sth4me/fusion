@@ -18,19 +18,21 @@ import (
 	"fusion/expr"
 	"fusion/logging"
 	"fusion/meta"
+	"fusion/relation"
 	"fusion/scan"
 )
 
 // Query 是 SELECT 查询构建器。
 type Query[T any] struct {
-	table  *meta.Table[T]
-	d      dialect.Dialect
-	execer queryExecer
+	table    *meta.Table[T]
+	d        dialect.Dialect
+	execer   queryExecer
 
-	where  expr.Expr
-	orders []builder.OrderItem
-	limit  int
-	offset int
+	where    expr.Expr
+	orders   []builder.OrderItem
+	limit    int
+	offset   int
+	preloads []string // 要预加载的关联字段名
 }
 
 // QueryExecer 抽象执行 SQL 的能力（*sql.DB 或 *sql.Tx 都满足）。
@@ -72,6 +74,14 @@ func (q *Query[T]) Offset(n int) *Query[T] {
 	return q
 }
 
+// Preload 添加要预加载的关联字段名（eager loading，IN 批量策略避免 N+1）。
+// 可多次调用加载多个关联，或用嵌套路径（"Posts"）。
+// 不调用则不查关联（默认行为，见文档决策 7）。
+func (q *Query[T]) Preload(fieldNames ...string) *Query[T] {
+	q.preloads = append(q.preloads, fieldNames...)
+	return q
+}
+
 // All 执行查询，扫描进 []T。
 func (q *Query[T]) All(ctx context.Context) ([]T, error) {
 	sqlStr, args := builder.BuildSELECT(q.table.Meta, builder.SelectQuery{
@@ -90,7 +100,33 @@ func (q *Query[T]) All(ctx context.Context) ([]T, error) {
 	defer rows.Close()
 	result, scanErr := scan.All[T](rows, q.table.Meta)
 	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: int64(len(result)), Err: scanErr})
-	return result, scanErr
+	if scanErr != nil {
+		return result, scanErr
+	}
+	// 显式 Close rows，释放连接（单连接模式下 Preload 子查询需要复用连接）
+	rows.Close()
+	// Preload 回填（IN 批量，避免 N+1）
+	if len(q.preloads) > 0 {
+		if err := q.runPreloads(ctx, result); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+// runPreloads 对 result 执行所有已配置的 Preload。
+func (q *Query[T]) runPreloads(ctx context.Context, result []T) error {
+	for _, field := range q.preloads {
+		rm := relation.Lookup(q.table.Meta.Type, field)
+		if rm == nil {
+			return fmt.Errorf("fusion: Preload: relation %q not registered on %s", field, q.table.Meta.Type)
+		}
+		// 传切片指针使元素可寻址（Preload 内部反射回填字段）
+		if err := relation.Preload(ctx, q.execer, q.d, &result, rm); err != nil {
+			return fmt.Errorf("fusion: Preload %q: %w", field, err)
+		}
+	}
+	return nil
 }
 
 // One 执行查询，返回第一行（自动加 LIMIT 1）。无结果返回 sql.ErrNoRows。
@@ -120,7 +156,20 @@ func (q *Query[T]) One(ctx context.Context) (T, error) {
 		rowsN = 0
 	}
 	logging.LogQuery(ctx, logging.QueryInfo{Op: "SELECT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsN, Err: scanErr})
-	return result, scanErr
+	if scanErr != nil {
+		return result, scanErr
+	}
+	// 显式 Close rows，释放连接（单连接模式下 Preload 子查询需要复用连接）
+	rows.Close()
+	// Preload 回填（单实体包成切片）
+	if len(q.preloads) > 0 {
+		single := []T{result}
+		if err := q.runPreloads(ctx, single); err != nil {
+			return result, err
+		}
+		result = single[0]
+	}
+	return result, nil
 }
 
 // Count 执行 SELECT COUNT(*) 查询。
