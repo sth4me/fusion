@@ -63,8 +63,8 @@ func assignTime(rv reflect.Value, src any) error {
 				return nil
 			}
 		}
-		rv.Set(reflect.ValueOf(time.Time{}))
-		return nil
+		// 解析全部失败：返回 error 而非静默置零（避免数据损坏无感知）。
+		return fmt.Errorf("fusion: cannot parse time %q into time.Time (tried RFC3339Nano, RFC3339, 2006-01-02 15:04:05, 2006-01-02)", x)
 	case []byte:
 		return assignTime(rv, string(x))
 	}

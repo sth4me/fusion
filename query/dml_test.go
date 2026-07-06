@@ -138,6 +138,40 @@ func TestUpdateAllFields(t *testing.T) {
 	}
 }
 
+// TestUpdateResetThenAllFields 验证 Col.Reset() 撤销 dirty 后，
+// 普通 Update 只发该字段；AllFields 仍可强制全量。
+func TestUpdateResetThenAllFields(t *testing.T) {
+	tab := regDMLModel()
+
+	// 1) Set 过 Age，再 Reset → 普通 Update 应报"无字段"（dirty 已清）
+	fe := &fakeDMLExecer{}
+	u := &dmlTestModel{}
+	u.Age.Set(25)
+	u.Age.Reset()
+	u.ID.Set(1) // 主键用于 Where
+	err := NewUpdate(tab, dialect.PostgresDialect, fe, u).
+		Where(tab.Proto.ID.Eq(1)).
+		Exec(context.Background())
+	if err == nil {
+		t.Error("after Reset, update with no other set field should error")
+	}
+
+	// 2) 同一个对象 AllFields 仍能强制全量更新
+	fe2 := &fakeDMLExecer{}
+	err = NewUpdate(tab, dialect.PostgresDialect, fe2, u).
+		Where(tab.Proto.ID.Eq(1)).
+		AllFields().
+		Exec(context.Background())
+	if err != nil {
+		t.Fatalf("AllFields after Reset should succeed: %v", err)
+	}
+	for _, colName := range []string{`"name" =`, `"age" =`, `"email" =`} {
+		if !strings.Contains(fe2.lastSQL, colName) {
+			t.Errorf("AllFields should update %s: %q", colName, fe2.lastSQL)
+		}
+	}
+}
+
 // TestUpdateNoFieldsError 验证无 set 字段时报错
 func TestUpdateNoFieldsError(t *testing.T) {
 	tab := regDMLModel()

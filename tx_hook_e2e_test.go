@@ -206,3 +206,38 @@ func TestE2E_TxSavepointPartialRollback(t *testing.T) {
 		}
 	}
 }
+
+// TestE2E_TxWithOpts 端到端验证 fusion.TxWith 的选项 API（隔离级别 + 重试）。
+func TestE2E_TxWithOpts(t *testing.T) {
+	wrapped, raw := setupTHDB(t)
+	defer raw.Close()
+	Users := fusion.Register[THUser]("users")
+
+	calls := 0
+	err := fusion.TxWith(context.Background(), raw,
+		func(ctx context.Context) error {
+			calls++
+			if calls == 1 {
+				// 模拟死锁，触发重试
+				return errors.New("Error 1213: Deadlock; try restarting transaction")
+			}
+			u := &THUser{}
+			u.Name.Set("alice")
+			u.Age.Set(30)
+			return fusion.Insert(Users, wrapped, u).Exec(ctx)
+		},
+		// 可同时传多个选项
+		fusion.WithIsolation(sql.LevelSerializable),
+		fusion.WithRetry(3, 0, 0),
+	)
+	if err != nil {
+		t.Fatalf("TxWith: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 calls (1 deadlock + 1 success), got %d", calls)
+	}
+	got, _ := fusion.From(Users, wrapped).Where(Users.Proto.Name.Eq("alice")).One(context.Background())
+	if got.Age.Get() != 30 {
+		t.Errorf("after retry age got %d", got.Age.Get())
+	}
+}

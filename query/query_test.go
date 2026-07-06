@@ -159,3 +159,57 @@ func TestQueryOffsetSQL(t *testing.T) {
 func TestOrderImplementsOrderItem(t *testing.T) {
 	var _ builder.OrderItem = col.Order{}
 }
+
+// qDept 是 qModel 的关联表，用于测试 One/Count 是否保留 Join/Alias。
+type qDept struct {
+	ID   col.Col[int64]
+	Name col.Col[string]
+}
+
+func regQDept() *meta.Table[qDept] {
+	return meta.Register[qDept]("q_depts")
+}
+
+// TestOnePreservesJoinAliasLock 验证 One() 复用 buildSelectQuery，
+// 不丢 Alias/Join/LockClause（回归 ForUpdate().One() 不上锁的数据正确性问题）。
+func TestOnePreservesJoinAliasLock(t *testing.T) {
+	tab := regQModel()
+	depts := regQDept()
+	fe := &fakeExecer{queryErr: errors.New("stop")}
+	u := tab.Proto
+	_, _ = New[qModel](tab, dialect.PostgresDialect, fe).
+		As("u").
+		Join("LEFT", depts, "d", u.ID.EqCol(depts.Proto.ID)).
+		Where(u.ID.Eq(1)).
+		ForUpdate().
+		One(context.Background())
+
+	for _, want := range []string{`AS "u"`, `LEFT JOIN "q_depts" AS "d"`, `FOR UPDATE`} {
+		if !strings.Contains(fe.lastSQL, want) {
+			t.Errorf("One SQL missing %q\n got: %q", want, fe.lastSQL)
+		}
+	}
+	// LIMIT 1 也应在
+	if !strings.Contains(fe.lastSQL, "LIMIT") {
+		t.Errorf("One SQL missing LIMIT\n got: %q", fe.lastSQL)
+	}
+}
+
+// TestCountPreservesJoin 验证 Count() 保留 Join/Where（回归带 JOIN 的 Count 列引用错误）。
+func TestCountPreservesJoin(t *testing.T) {
+	tab := regQModel()
+	depts := regQDept()
+	fe := &fakeExecer{queryErr: errors.New("stop")}
+	u := tab.Proto
+	defer func() { _ = recover() }() // QueryRowContext 返回 nil，Scan 会 panic
+	_, _ = New[qModel](tab, dialect.PostgresDialect, fe).
+		Join("INNER", depts, "d", u.ID.EqCol(depts.Proto.ID)).
+		Where(u.Age.Gt(18)).
+		Count(context.Background())
+
+	for _, want := range []string{"COUNT(*)", `INNER JOIN "q_depts" AS "d"`, `WHERE` + ` "age" > $1`} {
+		if !strings.Contains(fe.lastSQL, want) {
+			t.Errorf("Count SQL missing %q\n got: %q", want, fe.lastSQL)
+		}
+	}
+}

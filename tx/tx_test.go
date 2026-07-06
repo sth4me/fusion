@@ -172,3 +172,156 @@ func TestTx_DefaultMode(t *testing.T) {
 		t.Error("default mode should be reuse")
 	}
 }
+
+// capturingBeginner 包装 *sql.DB，记录 BeginTx 收到的 TxOptions。
+type capturingBeginner struct {
+	*sql.DB
+	lastOpts *sql.TxOptions
+}
+
+func (c *capturingBeginner) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	c.lastOpts = opts
+	return c.DB.BeginTx(ctx, opts)
+}
+
+// TestTxWithOpts_Isolation 透传隔离级别/只读到 BeginTx 的 TxOptions。
+func TestTxWithOpts_Isolation(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	cb := &capturingBeginner{DB: db}
+
+	err := TxWithOpts(context.Background(), cb, TxModeSavepoint, &Options{
+		TxOptions: &sql.TxOptions{
+			Isolation: sql.LevelSerializable,
+			ReadOnly:  true,
+		},
+	}, func(ctx context.Context) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+	if cb.lastOpts == nil {
+		t.Fatal("TxOptions not passed through (nil)")
+	}
+	if cb.lastOpts.Isolation != sql.LevelSerializable {
+		t.Errorf("isolation got %v, want Serializable", cb.lastOpts.Isolation)
+	}
+	if !cb.lastOpts.ReadOnly {
+		t.Error("ReadOnly not set")
+	}
+}
+
+// TestTxWithOpts_NilOptsEqualDefault opts=nil 时 BeginTx 收到 nil（与旧 Tx 行为一致）。
+func TestTxWithOpts_NilOptsEqualDefault(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+	cb := &capturingBeginner{DB: db}
+
+	err := TxWithOpts(context.Background(), cb, TxModeSavepoint, nil, func(ctx context.Context) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+	// nil opts → lastOpts 应为 nil（BeginTx(ctx, nil)）
+	if cb.lastOpts != nil {
+		t.Errorf("nil Options should pass nil TxOptions, got %+v", cb.lastOpts)
+	}
+}
+
+// TestTxWithOpts_RetryOnDeadlock 验证 fn 首次返回死锁错误时按配置重试，第二次成功。
+// 用真实 sqlite（BeginTx 正常），靠 fn 自身返回死锁模拟错误触发重试。
+func TestTxWithOpts_RetryOnDeadlock(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	calls := 0
+	err := TxWithOpts(context.Background(), db, TxModeSavepoint, &Options{
+		RetryDeadlocks:  3,
+		RetryBaseDelay:  0, // 用默认
+		RetryMaxDelay:   0,
+	}, func(ctx context.Context) error {
+		calls++
+		if calls == 1 {
+			// 模拟 MySQL 死锁错误（字符串含 1213/deadlock）
+			return errors.New("Error 1213: Deadlock found when trying to get lock; try restarting transaction")
+		}
+		// 第二次成功
+		runner := FromContext(ctx)
+		_, e := runner.ExecContext(ctx, "INSERT INTO accounts (id, balance) VALUES (1, 100)")
+		return e
+	})
+	if err != nil {
+		t.Fatalf("should succeed after retry: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("fn should be called twice (1 deadlock + 1 success), got %d", calls)
+	}
+	if balance(db, 1) != 100 {
+		t.Errorf("balance got %d, want 100", balance(db, 1))
+	}
+}
+
+// TestTxWithOpts_NoRetryOnNonDeadlock 验证普通错误不重试。
+func TestTxWithOpts_NoRetryOnNonDeadlock(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	calls := 0
+	err := TxWithOpts(context.Background(), db, TxModeSavepoint, &Options{
+		RetryDeadlocks: 3,
+	}, func(ctx context.Context) error {
+		calls++
+		return errors.New("some business error")
+	})
+	if err == nil {
+		t.Fatal("should return the business error")
+	}
+	if calls != 1 {
+		t.Errorf("non-deadlock error should not retry, got %d calls", calls)
+	}
+}
+
+// TestTxWithOpts_RetryExhausted 验证重试次数耗尽后返回错误。
+func TestTxWithOpts_RetryExhausted(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	calls := 0
+	err := TxWithOpts(context.Background(), db, TxModeSavepoint, &Options{
+		RetryDeadlocks: 2,
+	}, func(ctx context.Context) error {
+		calls++
+		return errors.New("40P01: deadlock detected")
+	})
+	if err == nil {
+		t.Fatal("should fail after retries exhausted")
+	}
+	// 1 次首次 + 2 次重试 = 3
+	if calls != 3 {
+		t.Errorf("expected 3 calls (1 + 2 retries), got %d", calls)
+	}
+}
+
+// TestIsRetryableTxError 覆盖各类错误字符串识别。
+func TestIsRetryableTxError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("40P01: deadlock detected"), true},
+		{errors.New("ERROR: could not serialize access (SQLSTATE 40001)"), true},
+		{errors.New("Error 1213: Deadlock found"), true},
+		{errors.New("Error 1205: Lock wait timeout exceeded"), true},
+		{errors.New("try restarting transaction"), true},
+		{errors.New("some unrelated error"), false},
+		{errors.New("connection refused"), false},
+	}
+	for _, c := range cases {
+		if got := isRetryableTxError(c.err); got != c.want {
+			t.Errorf("isRetryableTxError(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}

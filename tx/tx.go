@@ -11,7 +11,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math/rand"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Mode 是事务嵌套模式。
@@ -48,7 +51,6 @@ type txKey struct{}
 
 // frame 描述当前 context 中的事务帧。
 type frame struct {
-	db        *sql.DB    // 顶层时为原始 DB，用于 BeginTx
 	sqlTx     *sql.Tx    // 当前事务（顶层或复用时指向外层）
 	isNested  bool       // 是否嵌套（内层）
 	spName    string     // savepoint 名（savepoint 模式时）
@@ -84,31 +86,98 @@ func FromContext(ctx context.Context) Runner {
 
 // Tx 在事务中执行 fn。fn 返回 nil 则提交，返回 error 则回滚。
 // mode 为当前模式（嵌套时用）；传 0 用默认模式。
+//
+// 等价于 TxWithOpts(ctx, db, mode, nil, fn)。需要隔离级别/只读/死锁重试，用 TxWithOpts。
 func Tx(ctx context.Context, db Beginner, mode Mode, fn func(ctx context.Context) error) error {
+	return TxWithOpts(ctx, db, mode, nil, fn)
+}
+
+// Options 控制顶层事务的隔离级别、只读标志与死锁重试策略。
+// 仅对顶层事务生效；嵌套（savepoint/reuse）不重试。
+type Options struct {
+	// TxOptions 透传给 database/sql 的 BeginTx（隔离级别、只读）。
+	TxOptions *sql.TxOptions
+	// RetryDeadlocks 为死锁/序列化失败的最大重试次数（0=不重试）。
+	RetryDeadlocks int
+	// RetryBaseDelay 重试初始退避（默认 5ms）。
+	RetryBaseDelay time.Duration
+	// RetryMaxDelay 重试最大退避（默认 100ms）。
+	RetryMaxDelay time.Duration
+}
+
+// Option 是配置 Options 的函数式选项（供 fusion 层透传）。
+type Option func(*Options)
+
+// TxWithOpts 同 Tx，但支持隔离级别与死锁重试。opts 为 nil 时等价于 Tx。
+//
+// 重试语义：仅当 fn 执行期间发生可重试错误（PG 40P01/40P02/40001，
+// MySQL 1213/1205，或错误信息含 "deadlock"/"try restarting transaction"）时，
+// 按 RetryDeadlocks 次数指数退避重试整个事务。fn 必须幂等（重试会重复执行）。
+// begin/commit 阶段的错误不重试。
+func TxWithOpts(ctx context.Context, db Beginner, mode Mode, opts *Options, fn func(ctx context.Context) error) error {
 	if mode == 0 {
 		mode = DefaultMode()
 	}
 
-	// 检测外层事务
+	// 检测外层事务（嵌套不重试，opts 的隔离级别也只对顶层生效）
 	parent, hasParent := ctx.Value(txKey{}).(*frame)
 	if hasParent && parent != nil {
 		return runNested(ctx, db, mode, parent, fn)
 	}
-	return runTop(ctx, db, mode, fn)
+
+	if opts == nil || opts.RetryDeadlocks <= 0 {
+		return runTop(ctx, db, mode, opts, fn, 0)
+	}
+	base := opts.RetryBaseDelay
+	if base <= 0 {
+		base = 5 * time.Millisecond
+	}
+	maxD := opts.RetryMaxDelay
+	if maxD <= 0 {
+		maxD = 100 * time.Millisecond
+	}
+	var lastErr error
+	for attempt := 0; attempt <= opts.RetryDeadlocks; attempt++ {
+		err := runTop(ctx, db, mode, opts, fn, attempt)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isRetryableTxError(err) {
+			return err
+		}
+		if attempt < opts.RetryDeadlocks {
+			// 指数退避 + jitter（避免惊群）
+			backoff := base * (1 << attempt)
+			if backoff > maxD {
+				backoff = maxD
+			}
+			jitter := time.Duration(rand.Int63n(int64(backoff/2 + 1)))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff/2 + jitter):
+			}
+		}
+	}
+	return fmt.Errorf("fusion: tx failed after %d retries: %w", opts.RetryDeadlocks, lastErr)
 }
 
 // runTop 执行顶层事务（BEGIN/COMMIT/ROLLBACK）。
-func runTop(ctx context.Context, db Beginner, mode Mode, fn func(context.Context) error) error {
-	sqlDB, ok := db.(*sql.DB)
-	if !ok {
-		// db 不是 *sql.DB（理论上 Beginner 实现应基于 sql.DB）
-		return fmt.Errorf("fusion: tx requires *sql.DB at top level, got %T", db)
+// attempt 仅用于日志/调试，0=首次。
+//
+// db 需实现 Beginner（BeginTx + ExecContext）；*sql.DB 满足，便于测试注入 stub。
+func runTop(ctx context.Context, db Beginner, mode Mode, opts *Options, fn func(context.Context) error, attempt int) error {
+	_ = attempt
+	var txOpts *sql.TxOptions
+	if opts != nil {
+		txOpts = opts.TxOptions
 	}
-	sqltx, err := sqlDB.BeginTx(ctx, nil)
+	sqltx, err := db.BeginTx(ctx, txOpts)
 	if err != nil {
 		return fmt.Errorf("fusion: begin tx: %w", err)
 	}
-	f := &frame{db: sqlDB, sqlTx: sqltx, mode: mode}
+	f := &frame{sqlTx: sqltx, mode: mode}
 	f.top = f
 	childCtx := context.WithValue(ctx, txKey{}, f)
 
@@ -127,6 +196,33 @@ func runTop(ctx context.Context, db Beginner, mode Mode, fn func(context.Context
 		return fmt.Errorf("fusion: commit tx: %w", err)
 	}
 	return nil
+}
+
+// isRetryableTxError 判断错误是否为可重试的事务错误（死锁/序列化失败）。
+// 通过字符串匹配识别 PG/MySQL 的 SQLState，避免引入驱动依赖。
+func isRetryableTxError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// 解开包装
+	msg := err.Error()
+	// PG: 40P01(deadlock_detected) 40P02(serialization_failure) 40001(serialization_failure)
+	// MySQL: 1213(deadlock) 1205(lock wait timeout) Error 1062 重复键不重试
+	retryable := []string{
+		"40P01", "40P02", "40001", // PG SQLSTATE
+		"Error 1213", "1213", // MySQL deadlock
+		"Error 1205", "1205", // MySQL lock wait timeout
+		"deadlock", "Deadlock",
+		"try restarting transaction",
+		"could not serialize access",
+		"serialization failure",
+	}
+	for _, s := range retryable {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // runNested 执行嵌套事务（按模式 savepoint 或复用）。

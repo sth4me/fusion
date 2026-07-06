@@ -1,10 +1,14 @@
 package scan
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"fusion/col"
+	"fusion/logging"
 	"fusion/meta"
 )
 
@@ -122,6 +126,26 @@ func TestScanIgnoreUnknownColumn(t *testing.T) {
 	}
 	if len(out) != 1 {
 		t.Fatalf("got %d rows, want 1", len(out))
+	}
+}
+
+// TestScanUnknownColumnLogged 验证未知列丢弃时发出 Debug 日志，
+// 帮助排查模型/schema 漂移（回归：之前完全静默）。
+func TestScanUnknownColumnLogged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer logging.SetLogger(prev)
+
+	rows := &fakeRows{
+		cols: []string{"id", "name", "age", "email", "extra_col"},
+		data: [][]any{{int64(1), "alice", 30, "a@e.com", "ignored"}},
+	}
+	_, _ = All[tRow](rows, getMeta())
+
+	got := buf.String()
+	if !strings.Contains(got, "extra_col") || !strings.Contains(got, "not found in model") {
+		t.Errorf("expected debug log mentioning extra_col, got:\n%s", got)
 	}
 }
 

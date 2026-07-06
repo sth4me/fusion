@@ -136,6 +136,24 @@ func TestScanTimeValue(t *testing.T) {
 	}
 }
 
+// TestScanTimeParseError 验证无法解析的时间字符串返回 error，
+// 而非静默置零（回归：之前会默默设成 0001-01-01 造成数据损坏）。
+func TestScanTimeParseError(t *testing.T) {
+	var c Col[time.Time]
+	err := c.Scan("not-a-timestamp")
+	if err == nil {
+		t.Fatalf("expected error for unparseable time, got nil (value=%v)", c.Get())
+	}
+	if got := c.Get(); !got.IsZero() {
+		t.Errorf("on parse failure, value should remain zero, got %v", got)
+	}
+	// []byte 路径同样应报错
+	var c2 Col[time.Time]
+	if err := c2.Scan([]byte("also-bad")); err == nil {
+		t.Fatalf("expected error for unparseable []byte time, got nil")
+	}
+}
+
 func TestScanIntTypes(t *testing.T) {
 	// 不同整型源值扫描到 int64
 	var c Col[int64]

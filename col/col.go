@@ -52,6 +52,12 @@ func (c *Col[T]) Set(v T) {
 // IsSet 报告字段是否被显式 Set 过。
 func (c *Col[T]) IsSet() bool { return c.set }
 
+// Reset 清除字段的 set 标志（保留当前值），让 IsSet() 回到 false。
+// 用于复用对象时重置脏状态（例如把同一个 Col 切换到"全量保存"前的基线）。
+// 注意：Scan 不置 set 标志（见文档"陷阱1"），加载后的对象默认全部未 dirty；
+// Reset 主要服务于"显式 Set 后又想撤销 dirty"的场景，配合 Update().AllFields() 使用。
+func (c *Col[T]) Reset() { c.set = false }
+
 // IsZero 报告字段是否处于"零状态"——即从未被 Set 过。
 // 注意：Set(0) 之后 IsZero 返回 false（用户已明确赋值，即使值是零值）。
 // 这与 #3 的 set 标志语义一致：是否赋过值，而非值是否为零。

@@ -30,6 +30,23 @@ func TestSetGet(t *testing.T) {
 	}
 }
 
+// TestResetClearsDirty 验证 Reset 清除 set 标志但保留值。
+func TestResetClearsDirty(t *testing.T) {
+	var c Col[int]
+	c.Set(42)
+	if !c.IsSet() {
+		t.Fatal("should be set after Set")
+	}
+	c.Reset()
+	if c.IsSet() {
+		t.Error("IsSet should be false after Reset")
+	}
+	// 值保留
+	if got := c.Get(); got != 42 {
+		t.Errorf("value should be preserved after Reset, got %v", got)
+	}
+}
+
 func TestMetaFill(t *testing.T) {
 	// 注册模型，反射应填充 Col 的列名
 	tab := meta.Register[TestUser]("test_users")

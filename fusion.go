@@ -157,6 +157,55 @@ func TxWithMode(ctx context.Context, db *sql.DB, mode TxMode, fn func(ctx contex
 	return tx.Tx(ctx, db, mode, fn)
 }
 
+// TxOption 配置事务的隔离级别/只读/死锁重试（函数式选项）。
+type TxOption = tx.Option
+
+// WithIsolation 设置事务隔离级别。
+func WithIsolation(level sql.IsolationLevel) TxOption {
+	return func(o *tx.Options) {
+		if o.TxOptions == nil {
+			o.TxOptions = &sql.TxOptions{}
+		}
+		o.TxOptions.Isolation = level
+	}
+}
+
+// WithReadOnly 设置事务为只读。
+func WithReadOnly() TxOption {
+	return func(o *tx.Options) {
+		if o.TxOptions == nil {
+			o.TxOptions = &sql.TxOptions{}
+		}
+		o.TxOptions.ReadOnly = true
+	}
+}
+
+// WithRetry 配置死锁/序列化失败时的重试。max 为最大重试次数（不含首次）。
+// base/maxDelay 为退避初始/上限（≤0 时用默认 5ms/100ms）。
+// 仅顶层事务重试；fn 必须幂等。
+func WithRetry(max int, base, maxDelay time.Duration) TxOption {
+	return func(o *tx.Options) {
+		o.RetryDeadlocks = max
+		o.RetryBaseDelay = base
+		o.RetryMaxDelay = maxDelay
+	}
+}
+
+// TxWith 在事务中执行 fn，支持隔离级别/只读/死锁重试（函数式选项）。
+// 不传选项时等价于 Tx。示例：
+//
+//	fusion.TxWith(ctx, db,
+//	    fusion.WithIsolation(sql.LevelSerializable),
+//	    fusion.WithRetry(3, 5*time.Millisecond, 100*time.Millisecond),
+//	    func(ctx context.Context) error { ... })
+func TxWith(ctx context.Context, db *sql.DB, fn func(ctx context.Context) error, opts ...TxOption) error {
+	o := &tx.Options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return tx.TxWithOpts(ctx, db, tx.DefaultMode(), o, fn)
+}
+
 // --- 钩子（见 docs/DESIGN.md 钩子部分）---
 
 // HookEvent 钩子事件类型。

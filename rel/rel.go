@@ -62,6 +62,16 @@ func (r *Rel[T]) setLoad(v *T) {
 // （reflect 无法调用未导出方法，故提供导出入口。）
 func (r *Rel[T]) SetLoad(v *T) { r.setLoad(v) }
 
+// LoadedPtr 返回内部 val 指针（未加载或 nil 时返回 nil）。
+// 供 relation 包通过反射读取已回填的关联值做嵌套 Preload（避开未导出字段的 reflect 限制）。
+// 返回的是原指针，故嵌套回填可写回原对象。
+func (r *Rel[T]) LoadedPtr() *T {
+	if !r.loaded || r.val == nil {
+		return nil
+	}
+	return r.val
+}
+
 // MarshalJSON 实现 JSON 透明序列化：未加载或 nil → null；有值 → 序列化值。
 func (r Rel[T]) MarshalJSON() ([]byte, error) {
 	if r.val == nil {
@@ -129,6 +139,16 @@ func (r *RelMany[T]) setLoad(v []T) {
 
 // SetLoad 是 setLoad 的导出包装，供 relation 包回填。
 func (r *RelMany[T]) SetLoad(v []T) { r.setLoad(v) }
+
+// LoadedSliceAddr 返回内部 val 切片的指针（未加载或空时返回 nil）。
+// 供 relation 包通过反射读取已回填的关联切片做嵌套 Preload（元素可寻址，回填直达原对象，
+// 避开 reflect 对未导出字段的限制）。
+func (r *RelMany[T]) LoadedSliceAddr() *[]T {
+	if !r.loaded || len(r.val) == 0 {
+		return nil
+	}
+	return &r.val
+}
 
 // MarshalJSON 实现 JSON 透明序列化：未加载 → null；有值 → 序列化切片。
 func (r RelMany[T]) MarshalJSON() ([]byte, error) {

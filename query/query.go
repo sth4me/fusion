@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"fusion/builder"
@@ -89,8 +90,8 @@ func (q *Query[T]) Offset(n int) *Query[T] {
 }
 
 // Preload 添加要预加载的关联字段名（eager loading，IN 批量策略避免 N+1）。
-// 可多次调用加载多个关联，或用嵌套路径（"Posts"）。
-// 不调用则不查关联（默认行为，见文档决策 7）。
+// 可多次调用加载多个关联；支持点号嵌套路径（如 "Posts.Comments" 按段递归预加载，
+// 每段均为 IN 批量）。不调用则不查关联（默认行为，见文档决策 7）。
 func (q *Query[T]) Preload(fieldNames ...string) *Query[T] {
 	q.preloads = append(q.preloads, fieldNames...)
 	return q
@@ -246,14 +247,12 @@ func (q *Query[T]) All(ctx context.Context) ([]T, error) {
 }
 
 // runPreloads 对 result 执行所有已配置的 Preload。
+// 支持点号路径嵌套（如 "Posts.Comments"），按段递归预加载。
 func (q *Query[T]) runPreloads(ctx context.Context, result []T) error {
 	for _, field := range q.preloads {
-		rm := relation.Lookup(q.table.Meta.Type, field)
-		if rm == nil {
-			return fmt.Errorf("fusion: Preload: relation %q not registered on %s", field, q.table.Meta.Type)
-		}
+		path := strings.Split(field, ".")
 		// 传切片指针使元素可寻址（Preload 内部反射回填字段）
-		if err := relation.Preload(ctx, q.execer, q.d, &result, rm); err != nil {
+		if err := relation.PreloadPath(ctx, q.execer, q.d, &result, path); err != nil {
 			return fmt.Errorf("fusion: Preload %q: %w", field, err)
 		}
 	}
@@ -261,18 +260,13 @@ func (q *Query[T]) runPreloads(ctx context.Context, result []T) error {
 }
 
 // One 执行查询，返回第一行（自动加 LIMIT 1）。无结果返回 sql.ErrNoRows。
+// 复用 buildSelectQuery 以保留 Alias/Join/SelectCols/GroupBy/Having/LockClause
+// （否则 ForUpdate().One() 会静默丢锁、As().Join().One() 会丢 join）。
 func (q *Query[T]) One(ctx context.Context) (T, error) {
 	var zero T
-	// 复用 LIMIT 1 但不修改原 query 的 limit（拷贝）
-	saved := q.limit
-	q.limit = 1
-	sqlStr, args := builder.BuildSELECT(q.table.Meta, builder.SelectQuery{
-		Where:  q.where,
-		Orders: q.orders,
-		Limit:  q.limit,
-		Offset: q.offset,
-	}, q.d)
-	q.limit = saved
+	sq := q.buildSelectQuery()
+	sq.Limit = 1 // 在值拷贝上覆盖，不动原 Query 状态
+	sqlStr, args := builder.BuildSELECT(q.table.Meta, sq, q.d)
 
 	start := time.Now()
 	rows, err := q.execer.QueryContext(ctx, sqlStr, args...)
@@ -315,14 +309,15 @@ func (q *Query[T]) SubquerySQL() (string, []any) {
 }
 
 // Count 执行 SELECT COUNT(*) 查询，返回匹配 WHERE 的行数。
-// 用 builder.renderer 复用占位符/QuoteCol 逻辑（消除重复的 countRenderer）。
+// 复用 buildSelectQuery 以保留 Alias/Join/GroupBy/Having（带 JOIN 的 Count 也正确），
+// 仅覆盖投影为 COUNT(*)、去掉 ORDER BY/LIMIT/OFFSET/锁子句。
 func (q *Query[T]) Count(ctx context.Context) (int64, error) {
-	// 用 builder 的 renderer 渲染 WHERE（复用占位符与列引用）
-	sq := builder.SelectQuery{
-		SelectCols: []builder.SelectItem{col.Count[int64]()},
-		Where:      q.where,
-	}
-	// Count 不需要 ORDER BY/LIMIT，直接用 BuildSELECT 但只取 COUNT(*) 投影
+	sq := q.buildSelectQuery()
+	sq.SelectCols = []builder.SelectItem{col.Count[int64]()}
+	sq.Orders = nil
+	sq.Limit = 0
+	sq.Offset = 0
+	sq.LockClause = ""
 	sqlStr, args := builder.BuildSELECT(q.table.Meta, sq, q.d)
 	// BuildSELECT 会生成 SELECT COUNT(*) FROM ... WHERE ...，但 COUNT(*) 无 AS 别名，
 	// 扫描时按列位置取（第 1 列）。这里直接 QueryRowContext + Scan int64。

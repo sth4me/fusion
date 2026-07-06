@@ -59,6 +59,104 @@ func Preload(ctx context.Context, execer Execer, d dialect.Dialect, parent any, 
 	return fmt.Errorf("fusion: unknown relation kind %v", rm.Kind)
 }
 
+// PreloadPath 按点号路径递归预加载（如 ["Posts","Comments"] 等价 Preload("Posts.Comments")）。
+//
+// 流程（对 parent 切片）：
+//  1. 第一段：Lookup RelMeta → 调 Preload 批量回填（IN 策略，同层无 N+1）。
+//  2. 若只剩一段，结束。
+//  3. 否则对每个父元素，取其刚回填的关联（RelMany 的内部 []T 指针 / Rel 的 *T 指针），
+//     在**原对象**上递归剩余路径（深一层回填写回原对象，不丢更新）。
+//
+// 深层（≥2 段）采用"逐父元素子组递归"：第一层已批量，深层的 IN 范围天然是各父的子集合。
+// RelMany 通过 LoadedSliceAddr 拿到原切片指针（元素可寻址，回填直达原对象）；
+// Rel 通过 LoadedPtr 拿到原 *T（包装成单元素切片递归）。
+func PreloadPath(ctx context.Context, execer Execer, d dialect.Dialect, parent any, path []string) error {
+	if len(path) == 0 {
+		return nil
+	}
+	rv := reflect.ValueOf(parent)
+	for rv.Kind() == reflect.Ptr {
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Slice {
+		return fmt.Errorf("fusion: Preload requires a slice, got %s", rv.Kind())
+	}
+	if rv.Len() == 0 {
+		return nil
+	}
+
+	// 第一段：查父类型 + 字段名的 RelMeta
+	parentType := rv.Type().Elem()
+	rm := Lookup(parentType, path[0])
+	if rm == nil {
+		return fmt.Errorf("fusion: Preload: relation %q not registered on %s", path[0], parentType)
+	}
+	// 复用既有单段实现（已含 IN 批量、回填到原对象）
+	if err := Preload(ctx, execer, d, parent, rm); err != nil {
+		return err
+	}
+	if len(path) == 1 {
+		return nil // 无更深段
+	}
+
+	// 对每个父元素的已加载子集合，在原对象上递归剩余路径。
+	rest := path[1:]
+	for i := 0; i < rv.Len(); i++ {
+		elem := rv.Index(i)
+		relField := elem.Field(rm.FieldIndex).Addr() // *RelMany[T] / *Rel[T]
+		switch rm.Kind {
+		case KindHasMany, KindManyToMany:
+			if err := recurseRelMany(ctx, execer, d, relField, rest); err != nil {
+				return err
+			}
+		case KindHasOne, KindBelongsTo:
+			if err := recurseRel(ctx, execer, d, relField, rest); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// recurseRelMany 对一个 RelMany[T] 字段（已回填）的原切片递归预加载 rest 路径。
+// 通过 LoadedSliceAddr 拿到 *[]T（原切片指针，元素可寻址，深层回填直达原对象）。
+func recurseRelMany(ctx context.Context, execer Execer, d dialect.Dialect, relField reflect.Value, rest []string) error {
+	mv := relField.MethodByName("LoadedSliceAddr")
+	if !mv.IsValid() {
+		return nil
+	}
+	results := mv.Call(nil)
+	if len(results) != 1 || results[0].IsNil() {
+		return nil // 未加载或空
+	}
+	// results[0] 是 *[]T；传给 PreloadPath（它解引用指针得可寻址切片）
+	return PreloadPath(ctx, execer, d, results[0].Interface(), rest)
+}
+
+// recurseRel 对一个 Rel[T] 字段（已回填）的单值递归预加载 rest 路径。
+// 通过 LoadedPtr 拿到原 *T；构造单元素切片递归，完成后把深层回填结果拷回 *T。
+// （reflect 无法让两切片元素共享存储，故用"递归后拷回"保证 has_one/belongs_to 嵌套不丢更新。）
+func recurseRel(ctx context.Context, execer Execer, d dialect.Dialect, relField reflect.Value, rest []string) error {
+	mv := relField.MethodByName("LoadedPtr")
+	if !mv.IsValid() {
+		return nil
+	}
+	results := mv.Call(nil)
+	if len(results) != 1 || results[0].IsNil() {
+		return nil // 未加载或 nil
+	}
+	ptrVal := results[0]            // *T，指向原对象
+	elemType := ptrVal.Type().Elem()
+	slicePtr := reflect.New(reflect.SliceOf(elemType))
+	slicePtr.Elem().Set(reflect.Append(slicePtr.Elem(), ptrVal.Elem()))
+	if err := PreloadPath(ctx, execer, d, slicePtr.Interface(), rest); err != nil {
+		return err
+	}
+	// 把深层回填后的元素拷回原对象
+	ptrVal.Elem().Set(slicePtr.Elem().Index(0))
+	return nil
+}
+
 // （Execer 已在上方定义，QueryContext 返回 *sql.Rows）
 
 // collectFieldValues 从切片 rv 的每个元素，读取指定字段索引的 SQL 值（去重）。

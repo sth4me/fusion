@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"fusion/logging"
 	"fusion/meta"
 )
 
@@ -43,6 +44,8 @@ func All[T any](rows Rows, m *meta.ModelMeta) ([]T, error) {
 		fm := m.FieldByColumn(c)
 		if fm == nil {
 			// 列名找不到对应字段：标记 -1，扫描时用丢弃占位符。
+			// SELECT * 多出一列很常见，不报错；发一次 Debug 帮助排查模型/schema 漂移。
+			logUnknownColumn(m, c)
 			fieldIdx[i] = -1
 			continue
 		}
@@ -93,6 +96,7 @@ func AllRaw(rows Rows, m *meta.ModelMeta, elemType reflect.Type) (any, error) {
 	for i, c := range cols {
 		fm := m.FieldByColumn(c)
 		if fm == nil {
+			logUnknownColumn(m, c)
 			fieldIdx[i] = -1
 			continue
 		}
@@ -135,6 +139,18 @@ func fieldIndexByName(m *meta.ModelMeta, name string) int {
 		}
 	}
 	return -1
+}
+
+// logUnknownColumn 记录一次 Debug：结果集里的列在模型中找不到字段。
+// 帮助排查模型/数据库 schema 漂移（少写字段、SELECT * 多列、列名大小写不一致）。
+// 使用包级 logger（默认 Level=Warn 不输出，需用户设 Debug 级才可见）。
+func logUnknownColumn(m *meta.ModelMeta, col string) {
+	l := logging.Logger()
+	if l == nil {
+		return
+	}
+	l.Debug("fusion: scan: result column not found in model, discarded",
+		"column", col, "model", m.Type.String(), "table", m.Table)
 }
 
 // One 扫描单行（调用方已确认 Next 返回 true）。用于 LIMIT 1 / Get 场景。
