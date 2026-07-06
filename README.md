@@ -4,18 +4,23 @@
 
 ## 特性
 
-- **全字段包装**：模型字段用 `orm.Col[T]`，编译期类型安全 + 重命名安全，零字符串列名
+- **全字段包装**：模型字段用 `orm.Col[T]`，编译期类型安全 + 重命名安全，零字符串列名；支持**复合主键**（多 `db:"pk"`）
 - **关联**：belongs_to / has_one / has_many / many_to_many，Preload IN 批量预加载（避免 N+1），
   支持**点号嵌套**（`Preload("Posts.Comments")`）
 - **反向迁移**：读数据库 schema 构建运行时元数据（`LoadSchema`），**Bind 校验模型漂移**，
   **从外键自动注册关联**（手动优先，无外键也能用）
+- **Engine**：多库场景用 `fusion.New(db, opts...)` 创建独立 Engine（各自方言/logger/事务选项，互不干扰）；
+  单库用全局 API（默认 Engine 语法糖）一样方便
 - **灵活 JOIN**：类型安全 ON（`EqCol` 跨表）+ 投影结构体
 - **GROUP BY / 聚合 / HAVING / DISTINCT**：Count/Sum/Avg/Min/Max + 聚合排序
+- **UNION / INTERSECT / EXCEPT**：集合复合查询，尾部 ORDER/LIMIT 作用于整体
+- **CTE（WITH）**：含**递归**（树形/层级查询），CTE 体参数并入外层
+- **窗口函数**：`RowNumber/Rank/DenseRank/Lag/Lead` + `Over(partition, order)`（排名/累计/滑动窗口）
 - **子查询**：EXISTS / NOT EXISTS / IN 子查询，自动 build，参数并入外层
 - **事务**：savepoint 透明嵌套（部分回滚）+ reuse 模式；**隔离级别透传** + **死锁自动重试**
 - **DML**：Insert（单条/批量）/ Update（局部更新 set 标志，`Col.Reset()` 撤销 dirty）/ Delete / Upsert
 - **多方言**：PostgreSQL / MySQL / SQLite，方言差异自动抹平
-- **日志**：基于 `log/slog`，可桥接 zap/zerolog；QueryHook 拦截 SQL
+- **日志**：基于 `log/slog`，可桥接 zap/zerolog；QueryHook 拦截 SQL；**敏感字段自动脱敏**（password/token 等列的值在日志中替换为 `***`）
 - **JSON 字段**：`orm.Json[T]` 包装（jsonb / JSON）
 - **Raw 兜底**：`orm.Raw[T]` 原始 SQL 复用扫描器
 
@@ -170,6 +175,68 @@ fusion.TxWith(ctx, db,
 // 重试仅针对可重试错误（PG 40P01/40001、MySQL 1213/1205 等）；fn 必须幂等。
 ```
 
+## Engine（多库）
+
+单库用全局 API（最易用）；多库用 `fusion.New` 创建独立 Engine，各自方言/logger/事务选项互不干扰：
+
+```go
+// 多库：PG 主库 + SQLite 缓存库
+pgEngine := fusion.New(pgDB, fusion.WithDialect(dialect.PostgresDialect))
+cacheEngine := fusion.New(cacheDB, fusion.WithDialect(dialect.SQLiteDialect))
+
+// 各自查询（Go 1.26 不支持泛型方法，故 Engine 入口为 E 前缀顶层函数）
+pgEngine // → fusion.EFrom(pgEngine, Users).Where(...).All(ctx)
+cacheEngine // → fusion.EFrom(cacheEngine, CacheItems).Where(...).All(ctx)
+
+// 各自 logger / 慢阈值 / 事务默认
+auditEngine := fusion.New(db,
+    fusion.WithDialect(dialect.PostgresDialect),
+    fusion.WithLogger(auditLogger),
+    fusion.WithSlowThreshold(500*time.Millisecond),
+    fusion.WithTxIsolation(sql.LevelSerializable),
+)
+// 事务：fusion.ETx(auditEngine, ctx, func(ctx) error { ... })
+// per-Engine logger：查询时传 engine.Ctx(ctx) 把 logger 覆盖挂到 ctx
+fusion.EFrom(auditEngine, Users).Where(...).All(auditEngine.Ctx(ctx))
+```
+
+## 集合查询（UNION/CTE/窗口）
+
+```go
+// UNION（尾部 ORDER BY 作用于整体）
+q1 := fusion.From(Active, db).Where(Active.Proto.State.Eq("on"))
+q2 := fusion.From(Archived, db).Where(Archived.Proto.State.Eq("off"))
+all, _ := fusion.Union(q1, q2).OrderBy(/* ... */).All(ctx)
+// 也支持 fusion.UnionAll / Intersect / Except
+
+// CTE / WITH（递归：评论楼中楼）
+fusion.From(Comments, db).
+    With("tree", `SELECT ... UNION ALL SELECT ... JOIN tree ON ...`,
+        []any{rootID}, true /*recursive*/).
+    Where(Comments.Proto.ID.Eq(1)).All(ctx)
+// 递归 CTE 引用（FROM tree）走 fusion.Raw 最干净（builder FROM 固定模型表）
+
+// 窗口函数（按部门排名）
+fusion.From(Emps, db).Select(
+    Emps.Proto.ID.As("id"),
+    fusion.RowNumber().Over([]string{"dept"}, []string{"salary DESC"}).As("rn"),
+).AllInto(ctx, &view)
+// 也支持 fusion.Rank / DenseRank / Lag(col) / Lead(col) / Sum(col).Over(...)
+```
+
+## 敏感字段脱敏
+
+日志中敏感列的参数值自动替换为 `***`（默认含 password/token/api_key 等常见名）：
+
+```go
+fusion.AddSensitiveColumn("ssn", "credit_card")            // 追加
+fusion.SetSensitiveColumns([]string{"password", "token"})   // 覆盖
+fusion.SetRedactionEnabled(false)                           // 关闭（默认开）
+// 覆盖 WHERE/SET 的 col=? / col IN(...) / col BETWEEN / col LIKE 模式；
+// INSERT VALUES 的列映射保守不脱敏（用户可用 AddQueryHook 自行处理）。
+```
+
+
 ## 日志
 
 ```go
@@ -190,6 +257,10 @@ fusion.AddQueryHook(func(ctx context.Context, info fusion.QueryInfo) error {
 ## 设计文档
 
 详见 [docs/DESIGN.md](docs/DESIGN.md)，包含 9 项核心设计决策的完整推理。
+
+> 代码生成 CLI（`fusion/cmd/fusion-gen`）为**远期可选项**：反向迁移的运行时路线
+> （`LoadSchema` + `Bind` + `AutoRegisterRelations`）已覆盖核心能力，CLI 仅在需要
+> 静态模型/DAO 脚手架时另作独立工具，不进核心库。
 
 ## 反向迁移（DB → 元数据）
 
