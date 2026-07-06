@@ -203,6 +203,66 @@ func TestDeleteSQLGeneration(t *testing.T) {
 	}
 }
 
+// compositePKModel 复合主键测试模型（user_id + role_id 都是 db:"pk"）。
+type compositePKModel struct {
+	UserID col.Col[int64] `db:"pk"`
+	RoleID col.Col[int64] `db:"pk"`
+	Name   col.Col[string]
+}
+
+func regCompositePKModel() *meta.Table[compositePKModel] {
+	return meta.Register[compositePKModel]("dml_user_roles")
+}
+
+// TestCompositePK_BuildPKWhere 复合主键 Update 自动构造 WHERE（pk1=? AND pk2=?）。
+func TestCompositePK_BuildPKWhere(t *testing.T) {
+	tab := regCompositePKModel()
+	fe := &fakeDMLExecer{}
+	u := &compositePKModel{}
+	u.UserID.Set(1)
+	u.RoleID.Set(2)
+	u.Name.Set("admin") // 改 Name
+
+	err := NewUpdate(tab, dialect.PostgresDialect, fe, u). // 无 Where → 自动按复合 PK
+										Exec(context.Background())
+	if err != nil {
+		t.Fatalf("update composite PK: %v", err)
+	}
+	// WHERE 应含两个 PK 条件，用 AND 连接
+	if !strings.Contains(fe.lastSQL, `"user_id" = $`) || !strings.Contains(fe.lastSQL, `"role_id" = $`) {
+		t.Errorf("WHERE should contain both PK cols: %q", fe.lastSQL)
+	}
+	if !strings.Contains(fe.lastSQL, " AND ") {
+		t.Errorf("WHERE should use AND for composite PK: %q", fe.lastSQL)
+	}
+	// SET 只应有 name（PK 列不参与 SET）
+	setPart := fe.lastSQL
+	if i := strings.Index(fe.lastSQL, " WHERE "); i >= 0 {
+		setPart = fe.lastSQL[:i]
+	}
+	if !strings.Contains(setPart, `"name" =`) {
+		t.Errorf("SET should update name: %q", setPart)
+	}
+	if strings.Contains(setPart, `"user_id" =`) || strings.Contains(setPart, `"role_id" =`) {
+		t.Errorf("SET should NOT update PK cols: %q", setPart)
+	}
+}
+
+// TestCompositePK_DeleteByIDs 复合主键删除用 DeleteByIDs(map)。
+func TestCompositePK_DeleteByIDs(t *testing.T) {
+	tab := regCompositePKModel()
+	fe := &fakeDMLExecer{}
+	err := NewDeleteByID(tab, dialect.PostgresDialect, fe,
+		map[string]any{"user_id": int64(1), "role_id": int64(2)}).
+		Exec(context.Background())
+	if err != nil {
+		t.Fatalf("delete by composite PK: %v", err)
+	}
+	if !strings.Contains(fe.lastSQL, `"user_id" = $`) || !strings.Contains(fe.lastSQL, `"role_id" = $`) {
+		t.Errorf("delete WHERE should contain both PK cols: %q", fe.lastSQL)
+	}
+}
+
 // TestInsertNullField 验证 NULL 字段插入（Col[*string] nil）
 func TestInsertNullField(t *testing.T) {
 	tab := regDMLModel()

@@ -107,8 +107,20 @@ func DeleteDialect[T any](t *meta.Table[T], db DB, d dialect.Dialect) *query.Del
 }
 
 // DeleteByID 按主键删除单条（无需手动 Where）。
+// id 为单个标量，绑定到模型的【首个】主键列（适用于单列主键）。
+// 复合主键请用 DeleteByIDs 传入"列名→值"映射。
 func DeleteByID[T any](t *meta.Table[T], db DB, id any) *query.Deleter[T] {
-	return query.NewDeleteByID[T](t, defaultDialect, db, id)
+	pkCols := t.Meta.PrimaryKeyColumns()
+	if len(pkCols) == 0 {
+		return query.NewDeleteByID[T](t, defaultDialect, db, nil)
+	}
+	return query.NewDeleteByID[T](t, defaultDialect, db, map[string]any{pkCols[0]: id})
+}
+
+// DeleteByIDs 按主键删除单条，支持复合主键。
+// ids 为"主键列名 → 值"映射，如 map[string]any{"user_id": 1, "role_id": 2}。
+func DeleteByIDs[T any](t *meta.Table[T], db DB, ids map[string]any) *query.Deleter[T] {
+	return query.NewDeleteByID[T](t, defaultDialect, db, ids)
 }
 
 // Raw 执行原始 SQL，扫描进 *[]T。out 必须指向已注册模型类型的切片。

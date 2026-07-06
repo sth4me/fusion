@@ -165,3 +165,38 @@ func TestDBTagOverride(t *testing.T) {
 		t.Errorf("tag override got %v, want user_name", fm)
 	}
 }
+
+// TestCompositePrimaryKey 多个 db:"pk" 标记 → 多个 IsPrimaryKey 字段。
+func TestCompositePrimaryKey(t *testing.T) {
+	type userRole struct {
+		UserID mockDescriptor `db:"pk"`
+		RoleID mockDescriptor `db:"pk"`
+		Name   mockDescriptor
+	}
+	tab := Register[userRole]("t_composite_pk")
+	pk := tab.Meta.PrimaryKeyColumns()
+	if len(pk) != 2 {
+		t.Fatalf("got %d PK cols %v, want 2", len(pk), pk)
+	}
+	// 按声明顺序
+	if pk[0] != "user_id" || pk[1] != "role_id" {
+		t.Errorf("PK cols got %v, want [user_id role_id]", pk)
+	}
+	// Name 不应是主键
+	if fm := tab.Meta.FieldByName("Name"); fm != nil && fm.IsPrimaryKey {
+		t.Error("Name should not be PK")
+	}
+}
+
+// TestSinglePKFallback 无 db:"pk" 时首个非关联字段为主键（旧行为保留）。
+func TestSinglePKFallback(t *testing.T) {
+	type single struct {
+		ID   mockDescriptor
+		Name mockDescriptor
+	}
+	tab := Register[single]("t_single_pk")
+	pk := tab.Meta.PrimaryKeyColumns()
+	if len(pk) != 1 || pk[0] != "id" {
+		t.Errorf("got PK %v, want [id]", pk)
+	}
+}

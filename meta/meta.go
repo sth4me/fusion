@@ -64,6 +64,18 @@ func (m *ModelMeta) FieldByColumn(col string) *FieldMeta {
 	return m.byCol[col]
 }
 
+// PrimaryKeyColumns 返回所有主键列名（按字段声明顺序）。
+// 支持复合主键（多个 IsPrimaryKey 字段）；无主键返回 nil。
+func (m *ModelMeta) PrimaryKeyColumns() []string {
+	var out []string
+	for _, f := range m.Fields {
+		if f.IsPrimaryKey {
+			out = append(out, f.Column)
+		}
+	}
+	return out
+}
+
 // Table 是注册后的模型表对象，泛型持有模型类型信息，供 query 层使用。
 type Table[T any] struct {
 	Meta *ModelMeta
@@ -132,7 +144,7 @@ func Register[T any](name string) *Table[T] {
 	rv := reflect.ValueOf(proto).Elem()
 
 	fields := []FieldMeta{}
-	pkAssigned := false
+	explicitPKCount := 0 // 显式 db:"pk" 标记的 PK 列数（支持复合主键）
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
 		if !f.IsExported() {
@@ -140,7 +152,7 @@ func Register[T any](name string) *Table[T] {
 		}
 		// 解析 db 标签覆盖列名（可选，与"少用 tag"理念并存：默认零标签）。
 		col := f.Tag.Get("db")
-		// db:"pk" 标记主键（可选）；db:"colname" 指定列名
+		// db:"pk" 标记主键（可选，可多标，支持复合主键）；db:"colname" 指定列名
 		isPK := false
 		if col == "pk" {
 			isPK = true
@@ -154,11 +166,10 @@ func Register[T any](name string) *Table[T] {
 			Column:     col,
 			Table:      name,
 			IsRelation: isRelationType(f.Type),
+			IsPrimaryKey: isPK, // 显式标记的 PK（可多个）
 		}
-		// 主键约定：显式 db:"pk" 优先；否则首个非关联字段为主键
-		if !pkAssigned && isPK {
-			fm.IsPrimaryKey = true
-			pkAssigned = true
+		if isPK {
+			explicitPKCount++
 		}
 		fields = append(fields, fm)
 		t.Meta.byName[f.Name] = &fields[len(fields)-1]
@@ -172,8 +183,8 @@ func Register[T any](name string) *Table[T] {
 			}
 		}
 	}
-	// 若无显式主键标记，首个非关联字段约定为主键
-	if !pkAssigned {
+	// 若无任何显式主键标记，首个非关联字段约定为主键（保留旧行为）
+	if explicitPKCount == 0 {
 		for i := range fields {
 			if !fields[i].IsRelation {
 				fields[i].IsPrimaryKey = true

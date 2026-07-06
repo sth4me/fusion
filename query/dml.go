@@ -272,17 +272,13 @@ func (i *Inserter[T]) execBatch(ctx context.Context) error {
 }
 
 
-// returningCols 返回需要回填的列（主键列名）。
-// MVP：模型首个字段约定为主键，返回其列名。
+// returningCols 返回需要回填的主键列（复合主键时返回多列；RETURNING 多列扫描已支持）。
+// MySQL LastInsertId 路径仅回填首个主键（已知限制）。
 func (i *Inserter[T]) returningCols() []string {
 	if len(i.table.Meta.Fields) == 0 {
 		return nil
 	}
-	// 用 IsPrimaryKey 标记的主键列
-	if pk := primaryKeyColumn(i.table.Meta); pk != "" {
-		return []string{pk}
-	}
-	return nil
+	return i.table.Meta.PrimaryKeyColumns()
 }
 
 // execWithReturning 执行 INSERT ... RETURNING 并回填主键。
@@ -387,23 +383,38 @@ func (u *Updater[T]) AllFields() *Updater[T] {
 	return u
 }
 
-// buildPKWhere 用 target 的主键值构造 WHERE（主键列 = 值）。
+// buildPKWhere 用 target 的所有主键值构造 WHERE（pk1=? AND pk2=? ...）。
+// 支持复合主键；单列主键时退化为 pk=?。
 func (u *Updater[T]) buildPKWhere() (expr.Expr, error) {
-	pkCol := primaryKeyColumn(u.table.Meta)
-	if pkCol == "" {
+	pkCols := u.table.Meta.PrimaryKeyColumns()
+	if len(pkCols) == 0 {
 		return expr.Expr{}, fmt.Errorf("fusion: update without Where requires a primary key")
 	}
 	entries := u.table.Meta.CollectFields(u.target)
+	// 列名 → SQL 值
+	valByCol := map[string]any{}
 	for _, e := range entries {
-		if e.Column == pkCol {
-			v, err := e.Valuer.SQLValue()
-			if err != nil {
-				return expr.Expr{}, err
-			}
-			return expr.LeafParam(pkCol, "=", v), nil
+		valByCol[e.Column] = nil
+		v, err := e.Valuer.SQLValue()
+		if err != nil {
+			return expr.Expr{}, err
 		}
+		valByCol[e.Column] = v
 	}
-	return expr.Expr{}, fmt.Errorf("fusion: primary key %s not found on target", pkCol)
+	var conds []expr.Expr
+	for _, pk := range pkCols {
+		v, ok := valByCol[pk]
+		if !ok {
+			return expr.Expr{}, fmt.Errorf("fusion: primary key %s not found on target", pk)
+		}
+		conds = append(conds, expr.LeafParam(pk, "=", v))
+	}
+	// 从零值 Expr 起 And 所有 PK 条件（单列退化为一项，多列拼成 pk1=? AND pk2=?）
+	var where expr.Expr
+	for _, c := range conds {
+		where = where.And(c)
+	}
+	return where, nil
 }
 
 // Exec 执行 UPDATE（触发 BeforeUpdate/AfterUpdate 钩子）。
@@ -467,25 +478,25 @@ func (u *Updater[T]) Exec(ctx context.Context) error {
 	return nil
 }
 
-// isPrimaryKey 判断列名是否为主键（MVP：首个非关联字段）。
+// isPrimaryKey 判断列名是否为主键列（复合主键时多个列都算）。
+// 遍历所有 IsPrimaryKey 字段，而非只看首个非关联字段（修掉旧 bug）。
 func isPrimaryKey(m *meta.ModelMeta, col string) bool {
 	for _, f := range m.Fields {
-		if f.IsRelation {
-			continue
+		if f.IsPrimaryKey && f.Column == col {
+			return true
 		}
-		return f.Column == col
 	}
 	return false
 }
 
-// primaryKeyColumn 返回模型的主键列名（从 FieldMeta.IsPrimaryKey 取，无则空）。
+// primaryKeyColumn 返回模型的【首个】主键列名（向后兼容；复合主键请用 PrimaryKeyColumns）。
+// 无主键返回空串。
 func primaryKeyColumn(m *meta.ModelMeta) string {
-	for _, f := range m.Fields {
-		if f.IsPrimaryKey {
-			return f.Column
-		}
+	cols := m.PrimaryKeyColumns()
+	if len(cols) == 0 {
+		return ""
 	}
-	return ""
+	return cols[0]
 }
 
 // Deleter 是 DELETE 语句构建器。
@@ -502,9 +513,26 @@ func NewDelete[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer) *
 }
 
 // NewDeleteByID 构造按主键删除的 Deleter（无需手动 Where）。
-func NewDeleteByID[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer, id any) *Deleter[T] {
-	pkCol := primaryKeyColumn(t.Meta)
-	return &Deleter[T]{table: t, d: d, execer: execer, where: expr.LeafParam(pkCol, "=", id)}
+//
+// id 按"列名 → 值"映射传入，支持复合主键：
+//   - 单列主键：NewDeleteByID(t, d, ex, map[string]any{"id": 1})
+//   - 复合主键：NewDeleteByID(t, d, ex, map[string]any{"user_id": 1, "role_id": 2})
+//
+// 若只关心单列主键，fusion 层提供便捷 DeleteByID(t, db, id) —— 等价于
+// 用模型首个主键列名包成单元素 map。
+func NewDeleteByID[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer, id map[string]any) *Deleter[T] {
+	pkCols := t.Meta.PrimaryKeyColumns()
+	var conds []expr.Expr
+	for _, pk := range pkCols {
+		if v, ok := id[pk]; ok {
+			conds = append(conds, expr.LeafParam(pk, "=", v))
+		}
+	}
+	var where expr.Expr
+	for _, c := range conds {
+		where = where.And(c)
+	}
+	return &Deleter[T]{table: t, d: d, execer: execer, where: where}
 }
 
 // Where 设置删除条件。
