@@ -228,3 +228,59 @@ func TestConcurrentSetLogger(t *testing.T) {
 	}
 	<-done
 }
+
+// TestMapPlaceholdersToColumns 验证占位符→列名映射。
+func TestMapPlaceholdersToColumns(t *testing.T) {
+	cases := []struct {
+		sql  string
+		want []string
+	}{
+		{`SELECT * FROM users WHERE password = ? AND name = ?`, []string{"password", "name"}},
+		{`WHERE id IN (?, ?, ?)`, []string{"id", "id", "id"}},
+		{`WHERE age BETWEEN ? AND ?`, []string{"age", "age"}},
+		{`WHERE token LIKE ?`, []string{"token"}},
+	}
+	for _, c := range cases {
+		got := mapPlaceholdersToColumns(c.sql)
+		if len(got) != len(c.want) {
+			t.Errorf("sql %q: got %v, want %v", c.sql, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("sql %q: pos %d got %q, want %q", c.sql, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+// TestRedactArgs 验证敏感列参数被替换为 ***，普通列不动。
+func TestRedactArgs(t *testing.T) {
+	AddSensitiveColumn("password")
+	args := []any{"secret-pw", "alice"}
+	got := redactArgs(`WHERE password = ? AND name = ?`, args)
+	if got[0] != "***" {
+		t.Errorf("password arg should be redacted, got %v", got[0])
+	}
+	if got[1] != "alice" {
+		t.Errorf("name arg should NOT be redacted, got %v", got[1])
+	}
+
+	// IN 列表全脱敏
+	args2 := []any{"t1", "t2"}
+	got2 := redactArgs(`WHERE token IN (?, ?)`, args2)
+	if got2[0] != "***" || got2[1] != "***" {
+		t.Errorf("token IN args should both be redacted, got %v", got2)
+	}
+}
+
+// TestRedactionDisable 验证 SetRedactionEnabled(false) 关闭脱敏。
+func TestRedactionDisable(t *testing.T) {
+	AddSensitiveColumn("password")
+	SetRedactionEnabled(false)
+	defer SetRedactionEnabled(true)
+	got := redactArgs(`WHERE password = ?`, []any{"pw"})
+	if got[0] != "pw" {
+		t.Errorf("redaction disabled: arg should be original, got %v", got[0])
+	}
+}

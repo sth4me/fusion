@@ -93,6 +93,20 @@ type SelectQuery struct {
 	Limit      int
 	Offset     int
 	LockClause string        // 锁子句（"FOR UPDATE"/"FOR SHARE"/"FOR UPDATE NOWAIT"等，空=无锁）
+	CTEs       []CTESpec     // WITH 子句（CTE，含递归）；渲染在 SELECT 之前
+}
+
+// CTESpec 描述一个 CTE（公用表表达式）。
+//
+// 实现策略：CTE 体用原始 SQL + 参数（SQL 原样拼入，参数并入外层 renderer）。
+// 原因：CTE 内部可能 FROM 一个 CTE 名（无对应注册模型），无法走模型驱动的 builder；
+// 原始 SQL 是最灵活且与 Raw 兜底哲学一致的方式。
+type CTESpec struct {
+	Name      string   // CTE 名（被主查询/递归引用）
+	Recursive bool     // 是否递归（WITH RECURSIVE）
+	Columns   []string // 可选：CTE 列名列表（CTE 名后的 (col1, col2)）
+	SQL       string   // CTE 体的 SQL（不含外层括号；占位符用 ?，渲染时重写为外层序号）
+	Args      []any    // CTE 体的参数（与 SQL 中 ? 一一对应）
 }
 
 // BuildSubquerySQL 生成子查询 SQL（keepPrefix=true，保留外层表引用）。
@@ -133,6 +147,12 @@ func buildSelectBody(r *renderer, m *meta.ModelMeta, q SelectQuery, d dialect.Di
 	// renderer 已绑定方言（r.d），统一用它（兼容 d 参数为 nil 的子查询场景）
 	di := r.d
 
+	// WITH（CTE）：渲染在 SELECT 之前；CTE 参数先并入 renderer，保证占位符序号连续。
+	var sql string
+	if len(q.CTEs) > 0 {
+		sql = renderCTEs(r, q.CTEs) + " "
+	}
+
 	// SELECT 列：有 SelectCols 用投影项，否则整表所有列（向后兼容）
 	var colParts []string
 	if len(q.SelectCols) > 0 {
@@ -155,7 +175,7 @@ func buildSelectBody(r *renderer, m *meta.ModelMeta, q SelectQuery, d dialect.Di
 	if q.Distinct {
 		prefix = "SELECT DISTINCT "
 	}
-	sql := prefix + strings.Join(colParts, ", ") + " FROM " + di.QuoteTable(m.Table)
+	sql += prefix + strings.Join(colParts, ", ") + " FROM " + di.QuoteTable(m.Table)
 	if q.Alias != "" {
 		sql += " AS " + di.QuoteIdent(q.Alias)
 	}
@@ -223,4 +243,75 @@ func buildSelectBody(r *renderer, m *meta.ModelMeta, q SelectQuery, d dialect.Di
 	}
 
 	return sql
+}
+
+// renderCTEs 渲染 WITH 子句（含递归）：`WITH [RECURSIVE] name[(cols)] AS (body), ...`。
+// 每个 CTE body 中的 ? 占位符按出现顺序重写为 renderer 的编号（参数并入 r.args）。
+// 不含末尾空格；调用方负责拼接。
+func renderCTEs(r *renderer, ctes []CTESpec) string {
+	recursive := false
+	for _, c := range ctes {
+		if c.Recursive {
+			recursive = true
+			break
+		}
+	}
+	prefix := "WITH "
+	if recursive {
+		prefix = "WITH RECURSIVE "
+	}
+	parts := make([]string, 0, len(ctes))
+	for _, c := range ctes {
+		body := rewritePlaceholdersInto(r, c.SQL, c.Args)
+		var s string
+		if len(c.Columns) > 0 {
+			cols := make([]string, len(c.Columns))
+			for i, col := range c.Columns {
+				cols[i] = r.d.QuoteIdent(col)
+			}
+			s = r.d.QuoteIdent(c.Name) + " (" + strings.Join(cols, ", ") + ") AS (" + body + ")"
+		} else {
+			s = r.d.QuoteIdent(c.Name) + " AS (" + body + ")"
+		}
+		parts = append(parts, s)
+	}
+	return prefix + strings.Join(parts, ", ")
+}
+
+// rewritePlaceholdersInto 把 SQL 中的占位符（? 或 $N）按出现顺序重写为 renderer 的编号，
+// 并把对应 args 依次 AddParam。返回重写后的 SQL。
+func rewritePlaceholdersInto(r *renderer, sqlStr string, args []any) string {
+	var out strings.Builder
+	out.Grow(len(sqlStr))
+	argIdx := 0
+	i := 0
+	for i < len(sqlStr) {
+		ch := sqlStr[i]
+		if ch == '?' {
+			if argIdx < len(args) {
+				r.AddParam(args[argIdx])
+				argIdx++
+			}
+			out.WriteString(r.NextPlaceholder())
+			i++
+			continue
+		}
+		if ch == '$' && i+1 < len(sqlStr) && sqlStr[i+1] >= '1' && sqlStr[i+1] <= '9' {
+			// $N 形式：跳过数字，用 renderer 编号替换
+			j := i + 1
+			for j < len(sqlStr) && sqlStr[j] >= '0' && sqlStr[j] <= '9' {
+				j++
+			}
+			if argIdx < len(args) {
+				r.AddParam(args[argIdx])
+				argIdx++
+			}
+			out.WriteString(r.NextPlaceholder())
+			i = j
+			continue
+		}
+		out.WriteByte(ch)
+		i++
+	}
+	return out.String()
 }

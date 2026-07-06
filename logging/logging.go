@@ -14,6 +14,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -48,7 +49,72 @@ var (
 	hooks   []QueryHook
 	slow    = 200 * time.Millisecond
 	slowMu  sync.RWMutex
+
+	// sensitiveCols 需脱敏的列名集合（小写匹配）。默认含常见敏感列名。
+	sensMu         sync.RWMutex
+	sensitiveCols  = map[string]bool{
+		"password": true, "passwd": true, "secret": true, "token": true,
+		"api_key": true, "apikey": true, "access_token": true, "refresh_token": true,
+		"private_key": true, "privatekey": true, "credential": true, "credentials": true,
+	}
+	redactionEnabled = true
 )
+
+// AddSensitiveColumn 追加需脱敏的列名（大小写不敏感）。
+// 匹配到的列对应的参数值在日志中替换为 "***"。
+func AddSensitiveColumn(names ...string) {
+	sensMu.Lock()
+	defer sensMu.Unlock()
+	for _, n := range names {
+		sensitiveCols[strings.ToLower(n)] = true
+	}
+}
+
+// SetSensitiveColumns 设置（覆盖）脱敏列名集合。传 nil 清空（关闭按列脱敏）。
+func SetSensitiveColumns(names []string) {
+	sensMu.Lock()
+	defer sensMu.Unlock()
+	sensitiveCols = make(map[string]bool, len(names))
+	for _, n := range names {
+		sensitiveCols[strings.ToLower(n)] = true
+	}
+}
+
+// SetRedactionEnabled 开关按列脱敏（默认开）。关闭后日志原样输出参数。
+func SetRedactionEnabled(enabled bool) {
+	sensMu.Lock()
+	defer sensMu.Unlock()
+	redactionEnabled = enabled
+}
+
+// isSensitiveColumn 报告列名是否在脱敏集合中（大小写不敏感）。
+func isSensitiveColumn(col string) bool {
+	sensMu.RLock()
+	defer sensMu.RUnlock()
+	if !redactionEnabled {
+		return false
+	}
+	return sensitiveCols[strings.ToLower(col)]
+}
+
+// redactArgs 把 info.Args 中对应敏感列的值替换为 "***"。
+// 通过扫描 SQL 把每个占位符（? 或 $N）映射到其列名，再判断是否敏感。
+// 覆盖常见模式：col OP ?、col IN/BETWEEN ?。INSERT VALUES 的列映射较复杂，
+// 当前按"VALUES 区域内无法可靠定位列"保守不脱敏（用户可用 AddQueryHook 自行处理）。
+func redactArgs(sqlStr string, args []any) []any {
+	if len(args) == 0 {
+		return args
+	}
+	colAt := mapPlaceholdersToColumns(sqlStr) // [argIdx] -> colName
+	out := make([]any, len(args))
+	copy(out, args)
+	for i, col := range colAt {
+		if i < len(out) && isSensitiveColumn(col) {
+			out[i] = "***"
+		}
+	}
+	return out
+}
 
 // SetLogger 设置全局 slog.Logger（带 RWMutex，参照 tx/hook 包）。
 // 传入 nil 等同于丢弃所有日志（用 slog.New(discardHandler)）。
@@ -124,10 +190,12 @@ func LogQuery(ctx context.Context, info QueryInfo) {
 	}
 
 	// 2. 记录 slog（按内容选级别）
+	// 敏感字段脱敏：把敏感列对应的参数值替换为 "***"（仅影响日志输出，不改原 Args）
+	logArgs := redactArgs(info.SQL, info.Args)
 	attrs := []any{
 		slog.String("op", info.Op),
 		slog.String("sql", info.SQL),
-		slog.Any("args", info.Args),
+		slog.Any("args", logArgs),
 		slog.Duration("duration", info.Duration),
 		slog.Int64("rows", info.RowsAffected),
 	}
@@ -177,3 +245,113 @@ func (discardHandler) Enabled(context.Context, slog.Level) bool      { return fa
 func (discardHandler) Handle(context.Context, slog.Record) error     { return nil }
 func (h discardHandler) WithAttrs([]slog.Attr) slog.Handler          { return h }
 func (h discardHandler) WithGroup(string) slog.Handler               { return h }
+
+// mapPlaceholdersToColumns 扫描 SQL，返回每个占位符（按出现顺序）对应的列名。
+// 无法定位的占位符对应空串（不脱敏）。
+//
+// 支持的模式：
+//   - col OP ?          （OP ∈ =, <>, !=, >, >=, <, <=, LIKE, IS）
+//   - col IN (?, ?, ...)（区间内所有 ? 都归到 col）
+//   - col BETWEEN ? AND ?
+//
+// 不支持（保守留空，不脱敏）：INSERT INTO t (...) VALUES (...)、复杂表达式中的占位符。
+func mapPlaceholdersToColumns(sqlStr string) []string {
+	var out []string
+	low := strings.ToLower(sqlStr)
+	i := 0
+	n := len(sqlStr)
+	currentCol := "" // 当前生效的列名上下文
+	for i < n {
+		ch := sqlStr[i]
+		// 占位符 ? 或 $N
+		if ch == '?' {
+			out = append(out, currentCol)
+			i++
+			continue
+		}
+		if ch == '$' && i+1 < n && sqlStr[i+1] >= '1' && sqlStr[i+1] <= '9' {
+			j := i + 1
+			for j < n && sqlStr[j] >= '0' && sqlStr[j] <= '9' {
+				j++
+			}
+			out = append(out, currentCol)
+			i = j
+			continue
+		}
+		// 识别标识符 token（字母/下划线开头，含字母数字下划线），可能带点（table.col）
+		if isIdentStart(ch) {
+			j := i
+			for j < n && isIdentPart(sqlStr[j]) {
+				j++
+			}
+			tokLow := strings.ToLower(low[i:j])
+			// 跳过关键字（它们不是列名）
+			if isSQLKeyword(tokLow) {
+				// 特殊：IN / BETWEEN 后的列上下文保持（col IN (...)）
+				i = j
+				continue
+			}
+			// 这是一个列名候选。检查后续是否紧跟 OP / IN / BETWEEN。
+			// 跳过空白
+			k := j
+			for k < n && (sqlStr[k] == ' ' || sqlStr[k] == '\t' || sqlStr[k] == '\n' || sqlStr[k] == '\r') {
+				k++
+			}
+			if k < n {
+				nextLow := strings.ToLower(low[k:])
+				if hasPrefixAny(nextLow, "=", "<>", "!=", ">=", "<=", ">", "<") ||
+					strings.HasPrefix(nextLow, "like ") || strings.HasPrefix(nextLow, "is ") ||
+					strings.HasPrefix(nextLow, "in ") || strings.HasPrefix(nextLow, "in(") ||
+					strings.HasPrefix(nextLow, "between ") {
+					// 该列名后接比较/IN/BETWEEN/LIKE/IS → 设为当前列上下文
+					currentCol = tokLow
+					i = j
+					continue
+				}
+			}
+			// 非列名上下文：清空（避免上一个列串到无关占位符）
+			currentCol = ""
+			i = j
+			continue
+		}
+		// 其他字符（标点/空白）：逗号、右括号等会"断开"列上下文（IN 列表结束时）
+		if ch == ',' || ch == ')' {
+			// IN (?, ?, ?) 的逗号之间保持列上下文；右括号结束
+			if ch == ')' {
+				currentCol = ""
+			}
+			// 逗号：若在 IN 列表内，保持 currentCol；否则清空。简单处理：保留（IN 场景）
+		}
+		i++
+	}
+	return out
+}
+
+func isIdentStart(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+}
+
+func isIdentPart(c byte) bool {
+	return isIdentStart(c) || (c >= '0' && c <= '9') || c == '.'
+}
+
+// isSQLKeyword 报告 token 是否为不应作为列名的 SQL 关键字。
+func isSQLKeyword(tok string) bool {
+	switch tok {
+	case "select", "from", "where", "and", "or", "not", "in", "between",
+		"like", "is", "null", "values", "insert", "into", "update", "set",
+		"delete", "join", "on", "as", "order", "by", "group", "having",
+		"limit", "offset", "distinct", "case", "when", "then", "else", "end":
+		return true
+	}
+	return false
+}
+
+func hasPrefixAny(s string, prefixes ...string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}

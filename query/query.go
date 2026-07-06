@@ -48,6 +48,7 @@ type Query[T any] struct {
 	distinct   bool
 	alias      string               // 主表别名（Join/投影场景需要）
 	lockClause string               // 锁子句（FOR UPDATE 等）
+	ctes       []builder.CTESpec    // WITH 子句（CTE）
 }
 
 // QueryExecer 抽象执行 SQL 的能力（*sql.DB 或 *sql.Tx 都满足）。
@@ -166,6 +167,21 @@ func (q *Query[T]) As(alias string) *Query[T] {
 	return q
 }
 
+// With 附加一个 CTE（WITH 子句）。可多次调用附加多个。
+// name 为 CTE 名（主查询/递归中用 name 引用）；sqlStr 为 CTE 体（占位符用 ?，参数在 args）；
+// recursive=true 时整体渲染为 WITH RECURSIVE；columns 可选（CTE 列名列表）。
+// CTE 体的参数并入外层，占位符自动重写。
+func (q *Query[T]) With(name, sqlStr string, args []any, recursive bool, columns ...string) *Query[T] {
+	q.ctes = append(q.ctes, builder.CTESpec{
+		Name:      name,
+		Recursive: recursive,
+		Columns:   columns,
+		SQL:       sqlStr,
+		Args:      args,
+	})
+	return q
+}
+
 // buildSelectQuery 把 Query 的字段组装成 builder.SelectQuery。
 func (q *Query[T]) buildSelectQuery() builder.SelectQuery {
 	return builder.SelectQuery{
@@ -180,6 +196,7 @@ func (q *Query[T]) buildSelectQuery() builder.SelectQuery {
 		Limit:      q.limit,
 		Offset:     q.offset,
 		LockClause: q.lockClause,
+		CTEs:       q.ctes,
 	}
 }
 

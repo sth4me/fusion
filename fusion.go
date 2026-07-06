@@ -278,6 +278,17 @@ func AddQueryHook(h QueryHook) (unregister func()) { return logging.AddQueryHook
 // SetSlowThreshold 设置慢查询阈值（默认 200ms）。超过则 Warn 级记录。
 func SetSlowThreshold(d time.Duration) { logging.SetSlowThreshold(d) }
 
+// AddSensitiveColumn 追加需脱敏的列名（大小写不敏感）。
+// 日志中匹配列名对应的参数值会被替换为 "***"（避免 password/token 等进日志）。
+// 默认已含 password/passwd/secret/token/api_key/access_token/refresh_token/private_key/credential。
+func AddSensitiveColumn(names ...string) { logging.AddSensitiveColumn(names...) }
+
+// SetSensitiveColumns 覆盖脱敏列名集合（传 nil 清空）。
+func SetSensitiveColumns(names []string) { logging.SetSensitiveColumns(names) }
+
+// SetRedactionEnabled 开关按列脱敏（默认开）。关闭后日志原样输出参数。
+func SetRedactionEnabled(enabled bool) { logging.SetRedactionEnabled(enabled) }
+
 // --- 关联注册（见 docs/DESIGN.md 决策 5、#2、#7）---
 //
 // 用回调式取字段（func(u *User) any { return &u.Posts }），完全类型安全零字符串。
@@ -314,6 +325,31 @@ func ManyToMany(relField, joinLeftFK, joinRightFK, parentRef, childRef any) *rel
 	return relation.ManyToMany(relField, joinLeftFK, joinRightFK, parentRef, childRef)
 }
 
+// --- 集合复合查询（UNION/INTERSECT/EXCEPT）---
+//
+// 各入口接收同类型 T 的多个 *Query[T]，返回 *Compound[T]，可链式 .OrderBy/.Limit/.All。
+// 所有 arm 列结构须一致；ORDER/LIMIT/OFFSET 作用于整体。
+
+// Union 构造 UNION（去重）复合查询。
+func Union[T any](first *query.Query[T], others ...*query.Query[T]) *query.Compound[T] {
+	return query.Union(first, others...)
+}
+
+// UnionAll 构造 UNION ALL（不去重）。
+func UnionAll[T any](first *query.Query[T], others ...*query.Query[T]) *query.Compound[T] {
+	return query.UnionAll(first, others...)
+}
+
+// Intersect 构造 INTERSECT。
+func Intersect[T any](first *query.Query[T], others ...*query.Query[T]) *query.Compound[T] {
+	return query.Intersect(first, others...)
+}
+
+// Except 构造 EXCEPT。
+func Except[T any](first *query.Query[T], others ...*query.Query[T]) *query.Compound[T] {
+	return query.Except(first, others...)
+}
+
 // --- 灵活 Join + 投影 + 聚合（见 docs/DESIGN.md 决策 4）---
 
 // JOIN 类型常量。
@@ -341,6 +377,25 @@ func Min[T any](c col.Col[T]) col.SelectItem { return col.Min[T](c) }
 
 // Max 聚合函数。
 func Max[T any](c col.Col[T]) col.SelectItem { return col.Max[T](c) }
+
+// --- 窗口函数（必须配 .Over(partition, order)）---
+// 用法：fusion.RowNumber().Over(nil, []string{"age DESC"}).As("rn")
+//       fusion.Sum(Users.Proto.Salary).Over([]string{"dept_id"}, nil).As("dept_total")
+
+// RowNumber 窗口函数 ROW_NUMBER()。须配 .Over。
+func RowNumber() col.SelectItem { return col.RowNumber() }
+
+// Rank 窗口函数 RANK()。
+func Rank() col.SelectItem { return col.Rank() }
+
+// DenseRank 窗口函数 DENSE_RANK()。
+func DenseRank() col.SelectItem { return col.DenseRank() }
+
+// Lag 窗口函数 LAG(col)（向前 1 行）。
+func Lag[T any](c col.Col[T]) col.SelectItem { return col.Lag[T](c) }
+
+// Lead 窗口函数 LEAD(col)（向后 1 行）。
+func Lead[T any](c col.Col[T]) col.SelectItem { return col.Lead[T](c) }
 
 // --- 子查询（见 docs/DESIGN.md）---
 // 子查询接受 Query 对象（实现 SubqueryProvider），自动 build 子 SQL，
