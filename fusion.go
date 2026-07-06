@@ -16,6 +16,7 @@ import (
 	"fusion/hook"
 	"fusion/logging"
 	"fusion/meta"
+	"fusion/schema"
 	"fusion/expr"
 	"fusion/relation"
 	"fusion/query"
@@ -328,4 +329,61 @@ func Exists(sub SubqueryProvider) expr.Expr { return expr.Exists(sub) }
 
 // NotExists 生成 NOT EXISTS 子查询表达式。
 func NotExists(sub SubqueryProvider) expr.Expr { return expr.NotExists(sub) }
+
+// --- 反向迁移：数据库 schema 内省（见 docs） ---
+//
+// 运行时元数据路线：读数据库 → schema.Catalog（缓存），用于校验模型漂移、
+// 从外键自动注册关联。不生成 .go 源码。详见 schema 包文档。
+
+// Catalog 是数据库 schema 内省结果（表名 → Table）。
+type Catalog = schema.Catalog
+
+// SchemaTable 是单张表的数据库侧结构信息。
+type SchemaTable = schema.Table
+
+// LoadSchema 内省数据库 schema，构建 Catalog 缓存。
+// tables 为空则内省当前 schema 下所有用户表。d 为方言（决定内省 SQL）。
+// q 可为 *sql.DB 或 *sql.Tx（在事务内可重复读一致地内省）。
+func LoadSchema(ctx context.Context, q Queryer, d dialect.Dialect, tables ...string) (*Catalog, error) {
+	return schema.Load(ctx, q, d, tables...)
+}
+
+// SchemaDiff 描述一处模型与数据库 schema 的不一致。
+type SchemaDiff = schema.Diff
+
+// BindModel 比较已注册模型与数据库内省结果，返回差异列表（空=一致）。
+// tab 为 fusion.Register 的返回值（如 Users），满足 meta.TableOf 接口。
+func BindModel(cat *Catalog, tab meta.TableOf) []SchemaDiff {
+	return schema.Bind(cat, tab)
+}
+
+// MustBind 同 BindModel，但有差异时 panic（启动期 fail-fast，抓模型/schema 漂移）。
+func MustBind(cat *Catalog, tab meta.TableOf) {
+	if diffs := schema.Bind(cat, tab); len(diffs) > 0 {
+		panic(fmt.Sprintf("fusion: schema/model drift detected for %s:\n%s",
+			tab.ModelMeta().Type.String(), formatDiffs(diffs)))
+	}
+}
+
+// AutoRegisterRelations 扫描 Catalog 外键，自动注册未手动声明的关联（手动优先）。
+//   - 从外键推断 belongs_to（子表）+ has_many（引用表），按命名约定匹配模型字段。
+//   - 手写 relation.HasMany/BelongsTo 已注册的关联不被覆盖。
+//   - DB 无外键时 no-op，完全靠手写关联。
+// 注册后即可 Preload（如 posts.dept_id → depts.id，自动等价于
+// fusion.BelongsTo(...)/fusion.HasMany(...)）。
+func AutoRegisterRelations(cat *Catalog) {
+	schema.AutoRegisterRelations(cat)
+}
+
+// formatDiffs 把 Diff 列表格式化为多行字符串。
+func formatDiffs(diffs []SchemaDiff) string {
+	out := ""
+	for _, d := range diffs {
+		out += fmt.Sprintf("  [%s] %s: %s\n", d.Kind, d.Table, d.Detail)
+	}
+	return out
+}
+
+// Queryer 是 LoadSchema 所需的最小查询接口（*sql.DB / *sql.Tx 满足）。
+type Queryer = schema.Queryer
 

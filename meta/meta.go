@@ -219,6 +219,21 @@ func LookupByName(name string) reflect.Type {
 	return nil
 }
 
+// LookupByTable 按数据库表名查找已注册模型的 reflect.Type。
+// 用于反向迁移：从 schema 外键的引用表名（如 "posts"）反查对应 Go 类型。
+// 多个模型映射同一表名时返回最先注册的一个（一般不应发生）。
+// 找不到返回 nil。
+func LookupByTable(tableName string) reflect.Type {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	for rt, tab := range registry {
+		if tab.(TableOf).ModelMeta().Table == tableName {
+			return rt
+		}
+	}
+	return nil
+}
+
 // typeQualifiedName 返回类型的全名（包路径.类型名），与 reflect.Type.String() 一致。
 func typeQualifiedName(rt reflect.Type) string {
 	if rt.PkgPath() == "" {
@@ -298,6 +313,11 @@ func (m *ModelMeta) CollectFields(ptr any) []ColEntry {
 
 // snake 把驼峰命名转为蛇形（Name → name, CreatedAt → created_at, ID → id）。
 func snake(s string) string {
+	return Snake(s)
+}
+
+// Snake 是 snake 的导出版本，供 schema 等包复用，保证列名/字段名映射一致。
+func Snake(s string) string {
 	if s == "" {
 		return ""
 	}
