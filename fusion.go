@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"fusion/col"
@@ -24,14 +25,26 @@ import (
 	"fusion/tx"
 )
 
-// 默认方言。可由 SetDefaultDialect 修改。
-var defaultDialect dialect.Dialect = dialect.PostgresDialect
+// 默认方言（全局）。可由 SetDefaultDialect 修改；读写在 defaultDialectMu 下，
+// 消除原无锁访问的 data race。
+var (
+	defaultDialectMu sync.RWMutex
+	defaultDialect   dialect.Dialect = dialect.PostgresDialect
+)
 
-// SetDefaultDialect 设置全局默认方言。
-func SetDefaultDialect(d dialect.Dialect) { defaultDialect = d }
+// SetDefaultDialect 设置全局默认方言（影响 From/Insert/... 等全局入口）。
+func SetDefaultDialect(d dialect.Dialect) {
+	defaultDialectMu.Lock()
+	defaultDialect = d
+	defaultDialectMu.Unlock()
+}
 
-// DefaultDialect 返回当前默认方言。
-func DefaultDialect() dialect.Dialect { return defaultDialect }
+// DefaultDialect 返回当前全局默认方言。
+func DefaultDialect() dialect.Dialect {
+	defaultDialectMu.RLock()
+	defer defaultDialectMu.RUnlock()
+	return defaultDialect
+}
 
 // DB 是执行查询所需的最小接口（*sql.DB / *sql.Tx 满足）。
 type DB = query.QueryExecer
@@ -55,7 +68,7 @@ func Register[T any](name string) *meta.Table[T] {
 
 // From 返回绑定到 table、通过 db 执行的 Query[T]，使用默认方言。
 func From[T any](t *meta.Table[T], db DB) *query.Query[T] {
-	return query.New[T](t, defaultDialect, db)
+	return query.New[T](t, DefaultDialect(), db)
 }
 
 // FromDialect 同 From，但指定方言。
@@ -66,19 +79,19 @@ func FromDialect[T any](t *meta.Table[T], db DB, d dialect.Dialect) *query.Query
 // Insert 返回绑定到 target 实体的 Inserter（插入 target 中已 Set 的字段）。
 // 无 Where 的 Update 自动按主键更新；Insert 支持 .OnConflict 做 Upsert。
 func Insert[T any](t *meta.Table[T], db DB, target *T) *query.Inserter[T] {
-	return query.NewInsert[T](t, defaultDialect, db, target)
+	return query.NewInsert[T](t, DefaultDialect(), db, target)
 }
 
 // InsertBatch 批量插入。targets 的已 Set 列取并集，缺失列填 NULL。
 // RETURNING 路径逐行回填主键；MySQL 旧版只回填首个主键（文档限制）。
 func InsertBatch[T any](t *meta.Table[T], db DB, targets []*T) *query.Inserter[T] {
-	return query.NewInsertBatch[T](t, defaultDialect, db, targets)
+	return query.NewInsertBatch[T](t, DefaultDialect(), db, targets)
 }
 
 // Upsert 是 Insert 的别名，语义提示用 OnConflict（INSERT...ON CONFLICT/ON DUPLICATE KEY）。
 // 用法：fusion.Upsert(Users, db, &u).OnConflict([]string{"id"}, []string{"name"}).Exec(ctx)
 func Upsert[T any](t *meta.Table[T], db DB, target *T) *query.Inserter[T] {
-	return query.NewInsert[T](t, defaultDialect, db, target)
+	return query.NewInsert[T](t, DefaultDialect(), db, target)
 }
 
 // InsertDialect 同 Insert，但指定方言。
@@ -88,7 +101,7 @@ func InsertDialect[T any](t *meta.Table[T], db DB, d dialect.Dialect, target *T)
 
 // Update 返回绑定到 target 实体的 Updater（仅更新 set==true 的字段，见 #3）。
 func Update[T any](t *meta.Table[T], db DB, target *T) *query.Updater[T] {
-	return query.NewUpdate[T](t, defaultDialect, db, target)
+	return query.NewUpdate[T](t, DefaultDialect(), db, target)
 }
 
 // UpdateDialect 同 Update，但指定方言。
@@ -98,7 +111,7 @@ func UpdateDialect[T any](t *meta.Table[T], db DB, d dialect.Dialect, target *T)
 
 // Delete 返回 Deleter。
 func Delete[T any](t *meta.Table[T], db DB) *query.Deleter[T] {
-	return query.NewDelete[T](t, defaultDialect, db)
+	return query.NewDelete[T](t, DefaultDialect(), db)
 }
 
 // DeleteDialect 同 Delete，但指定方言。
@@ -112,15 +125,15 @@ func DeleteDialect[T any](t *meta.Table[T], db DB, d dialect.Dialect) *query.Del
 func DeleteByID[T any](t *meta.Table[T], db DB, id any) *query.Deleter[T] {
 	pkCols := t.Meta.PrimaryKeyColumns()
 	if len(pkCols) == 0 {
-		return query.NewDeleteByID[T](t, defaultDialect, db, nil)
+		return query.NewDeleteByID[T](t, DefaultDialect(), db, nil)
 	}
-	return query.NewDeleteByID[T](t, defaultDialect, db, map[string]any{pkCols[0]: id})
+	return query.NewDeleteByID[T](t, DefaultDialect(), db, map[string]any{pkCols[0]: id})
 }
 
 // DeleteByIDs 按主键删除单条，支持复合主键。
 // ids 为"主键列名 → 值"映射，如 map[string]any{"user_id": 1, "role_id": 2}。
 func DeleteByIDs[T any](t *meta.Table[T], db DB, ids map[string]any) *query.Deleter[T] {
-	return query.NewDeleteByID[T](t, defaultDialect, db, ids)
+	return query.NewDeleteByID[T](t, DefaultDialect(), db, ids)
 }
 
 // Raw 执行原始 SQL，扫描进 *[]T。out 必须指向已注册模型类型的切片。

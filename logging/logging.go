@@ -99,6 +99,9 @@ func SlowThreshold() time.Duration {
 
 // LogQuery 统一入口：触发所有 QueryHook 并记录 slog。
 // 在每个执行点拿到 err/耗时/行数后调用。
+//
+// 优先使用 ctx 携带的 per-Engine 覆盖（logger/slow 阈值），无则用全局。
+// 这样多 Engine 场景能各自记不同 logger；全局 API（无 Engine）行为不变。
 func LogQuery(ctx context.Context, info QueryInfo) {
 	// 1. 触发 QueryHook（RLock 下复制切片，执行时不持锁，参照 hook.go）
 	mu.RLock()
@@ -106,6 +109,12 @@ func LogQuery(ctx context.Context, info QueryInfo) {
 	copy(cb, hooks)
 	lg := logger
 	mu.RUnlock()
+	// ctx 携带的 per-call 覆盖（Engine 注入 logger；slow 阈值后面单独取）
+	if ol, _, ok := loggerFromCtx(ctx); ok {
+		if ol != nil {
+			lg = ol
+		}
+	}
 	for _, h := range cb {
 		if h == nil {
 			continue
@@ -122,14 +131,43 @@ func LogQuery(ctx context.Context, info QueryInfo) {
 		slog.Duration("duration", info.Duration),
 		slog.Int64("rows", info.RowsAffected),
 	}
+	// 慢查询阈值：优先 ctx 覆盖，无则全局
+	slowThreshold := SlowThreshold()
+	if _, sc, ok := loggerFromCtx(ctx); ok && sc >= 0 {
+		slowThreshold = sc
+	}
 	switch {
 	case info.Err != nil:
 		lg.Error("query failed", append(attrs, slog.Any("err", info.Err))...)
-	case info.Duration >= SlowThreshold():
+	case info.Duration >= slowThreshold:
 		lg.Warn("slow query", attrs...)
 	default:
 		lg.Debug("query", attrs...)
 	}
+}
+
+// ctxLoggerKey 是 context 中 per-Engine logger/slow 覆盖的 key。
+type ctxLoggerKey struct{}
+
+// ctxOverride 携带 Engine 注入的 logger 和 slow 阈值（slow<0 表示用全局）。
+type ctxOverride struct {
+	logger *slog.Logger
+	slow   time.Duration
+}
+
+// WithOverride 把 logger/slow 覆盖挂到 ctx，返回新 ctx。
+// 供 Engine 在执行查询前注入，实现 per-Engine 日志/慢阈值。
+// lg 为 nil 表示沿用全局 logger；slow < 0 表示沿用全局阈值。
+func WithOverride(ctx context.Context, lg *slog.Logger, slow time.Duration) context.Context {
+	return context.WithValue(ctx, ctxLoggerKey{}, ctxOverride{logger: lg, slow: slow})
+}
+
+// loggerFromCtx 从 ctx 取 per-Engine 覆盖（若有）。
+func loggerFromCtx(ctx context.Context) (*slog.Logger, time.Duration, bool) {
+	if o, ok := ctx.Value(ctxLoggerKey{}).(ctxOverride); ok {
+		return o.logger, o.slow, true
+	}
+	return nil, 0, false
 }
 
 // discardHandler 丢弃所有日志的 slog.Handler（用于 SetLogger(nil) 或静默场景）。
