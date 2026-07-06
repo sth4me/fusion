@@ -5,12 +5,15 @@
 ## 特性
 
 - **全字段包装**：模型字段用 `orm.Col[T]`，编译期类型安全 + 重命名安全，零字符串列名
-- **关联**：belongs_to / has_one / has_many / many_to_many，Preload IN 批量预加载（避免 N+1）
+- **关联**：belongs_to / has_one / has_many / many_to_many，Preload IN 批量预加载（避免 N+1），
+  支持**点号嵌套**（`Preload("Posts.Comments")`）
+- **反向迁移**：读数据库 schema 构建运行时元数据（`LoadSchema`），**Bind 校验模型漂移**，
+  **从外键自动注册关联**（手动优先，无外键也能用）
 - **灵活 JOIN**：类型安全 ON（`EqCol` 跨表）+ 投影结构体
 - **GROUP BY / 聚合 / HAVING / DISTINCT**：Count/Sum/Avg/Min/Max + 聚合排序
 - **子查询**：EXISTS / NOT EXISTS / IN 子查询，自动 build，参数并入外层
-- **事务**：savepoint 透明嵌套（部分回滚）+ reuse 模式
-- **DML**：Insert（单条/批量）/ Update（局部更新 set 标志）/ Delete / Upsert
+- **事务**：savepoint 透明嵌套（部分回滚）+ reuse 模式；**隔离级别透传** + **死锁自动重试**
+- **DML**：Insert（单条/批量）/ Update（局部更新 set 标志，`Col.Reset()` 撤销 dirty）/ Delete / Upsert
 - **多方言**：PostgreSQL / MySQL / SQLite，方言差异自动抹平
 - **日志**：基于 `log/slog`，可桥接 zap/zerolog；QueryHook 拦截 SQL
 - **JSON 字段**：`orm.Json[T]` 包装（jsonb / JSON）
@@ -92,9 +95,10 @@ fusion.HasMany(
     func(u *User) any { return &u.ID },
 )
 
-// Preload（默认不查关联，显式才查）
+// Preload（默认不查关联，显式才查）；支持点号嵌套（每段 IN 批量）
 users, _ := fusion.From(Users, wrapped).
-    Preload("Posts").
+    Preload("Posts").               // 单层
+    Preload("Posts.Comments").      // 嵌套：User→Posts→Comments
     Where(Users.Proto.ID.Eq(1)).
     All(context.Background())
 posts, _ := users[0].Posts.All()  // 未 Preload 返回 ErrNotLoaded
@@ -154,6 +158,18 @@ fusion.Tx(context.Background(), db, func(ctx context.Context) error {
 // 嵌套事务用 savepoint（默认），支持部分回滚
 ```
 
+隔离级别与死锁重试（函数式选项，仅顶层事务生效）：
+
+```go
+fusion.TxWith(ctx, db,
+    func(ctx context.Context) error { /* ... */ },
+    fusion.WithIsolation(sql.LevelSerializable),                                   // 隔离级别
+    fusion.WithReadOnly(),                                                          // 只读
+    fusion.WithRetry(3, 5*time.Millisecond, 100*time.Millisecond),                 // 死锁指数退避重试
+)
+// 重试仅针对可重试错误（PG 40P01/40001、MySQL 1213/1205 等）；fn 必须幂等。
+```
+
 ## 日志
 
 ```go
@@ -174,6 +190,42 @@ fusion.AddQueryHook(func(ctx context.Context, info fusion.QueryInfo) error {
 ## 设计文档
 
 详见 [docs/DESIGN.md](docs/DESIGN.md)，包含 9 项核心设计决策的完整推理。
+
+## 反向迁移（DB → 元数据）
+
+fusion 不生成 `.go` 源码、不做正向迁移（Model → DDL）。原因是 `Col[T]` 不携带 SQL
+类型/长度/约束信息，正向生成有损且需大量人介入。**反向路线则确定且互补**：数据库是真理，
+读它构建运行时 `schema.Catalog`，与 `meta.ModelMeta`（反射侧）拼出完整图景。
+
+三个核心能力：
+
+```go
+// 1) 内省数据库 schema → Catalog（缓存列/主键/外键/索引，三方言）
+cat, _ := fusion.LoadSchema(ctx, db, dialect.SQLiteDialect, "users", "posts")
+
+// 2) Bind：校验模型 vs 数据库是否漂移（启动期 fail-fast）
+fusion.MustBind(cat, Users)  // 列缺失/多余/主键不一致 → panic 报具体差异
+
+// 3) AutoRegisterRelations：从外键自动注册 belongs_to + has_many（手动优先）
+fusion.AutoRegisterRelations(cat)
+// 等价于：扫到 posts.user_id → users.id，自动注册
+//   relation.BelongsTo(Post.Dept, ...) + relation.HasMany(User.Posts, ...)
+// 之后可直接 Preload，无需手写任何 HasMany/BelongsTo。
+```
+
+**关联注册双轨制（重要）**：fusion 同时支持手写和外键自动发现，二者并存：
+
+- **有外键**：`AutoRegisterRelations` 扫外键自动注册，零样板代码。
+- **无外键**（分库分表、性能、应用层管完整性的常见实践）：函数 no-op，完全靠手写
+  `fusion.HasMany/BelongsTo/...`，和之前一样。
+- **手动优先**：已手写注册的关联**不被**自动注册覆盖。
+
+命名约定（自动注册匹配字段名）：
+- belongs_to 字段：FK 列去 `_id` 后缀 PascalCase（`dept_id` → `Dept`），须为 `rel.Rel[T]`。
+- has_many 字段：子模型类型名复数化（`Post` → `Posts`），须为 `rel.RelMany[T]`。
+- 约定不符 / 复合外键 / 子模型未注册 → 跳过并 Debug log（用户可手写补充）。
+
+完整示例见 `examples/reverse`。
 
 ## 支持的 Go 版本
 

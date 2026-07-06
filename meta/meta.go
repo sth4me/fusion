@@ -10,6 +10,7 @@ package meta
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"unicode"
 )
@@ -256,18 +257,15 @@ func RangeTables(fn func(rt reflect.Type, tab TableOf) bool) {
 }
 
 // isRelationType 判断字段类型是否为关联描述符（Rel/RelMany）。
-// 通过接口探测，避免 meta 依赖 col/rel 包（解耦）。
+//
+// 实现方式：按类型名字符串前缀判断（"rel.Rel[" / "rel.RelMany["）。
+// 不用接口 Implements 的原因：Rel/RelMany 的 _isRelation 标记方法未导出，
+// 跨包（meta vs rel）时 reflect.Implements 视为不同方法无法匹配。
+// 字符串前缀法与 relation.resolveField 一致，且避免 meta 依赖 rel 包。
 func isRelationType(t reflect.Type) bool {
-	// 关联描述符实现 RelationMarker 接口来表明身份（见 col/rel 包）。
-	return t.Implements(relationMarkerType) || reflect.PointerTo(t).Implements(relationMarkerType)
+	s := t.String()
+	return strings.HasPrefix(s, "rel.Rel[") || strings.HasPrefix(s, "rel.RelMany[")
 }
-
-// relationMarker 由关联描述符实现，供 meta 识别关联字段。
-type relationMarker interface {
-	_isRelation()
-}
-
-var relationMarkerType = reflect.TypeOf((*relationMarker)(nil)).Elem()
 
 // FieldValuer 由 col.Col[T] 实现，供 DML 生成时反射收集字段值。
 // meta 通过接口断言访问，避免依赖 col 包。
