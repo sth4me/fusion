@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # 默认套件：SQLite，全平台验证（含 vet + race + coverage）
+  test-sqlite:
+    name: Test (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Go vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test with race detector
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Upload coverage
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-sqlite
+          path: coverage.out
+
+  # PostgreSQL 集成测试（build tag postgres）
+  test-postgres:
+    name: Test (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fusion
+          POSTGRES_PASSWORD: fusion
+          POSTGRES_DB: fusion_test
+        ports:
+          - 5432:5432
+        # 等待 PG 就绪
+        options: >-
+          --health-cmd "pg_isready -U fusion -d fusion_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_PG_DSN: "host=localhost port=5432 user=fusion password=fusion dbname=fusion_test sslmode=disable"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Vet (postgres tag)
+        run: go vet -tags postgres ./...
+      - name: Test
+        run: go test -tags postgres -v -timeout 120s -run "TestPG_" .
+
+  # MySQL 集成测试（build tag mysql）
+  test-mysql:
+    name: Test (MySQL)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: fusion
+          MYSQL_DATABASE: fusion_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pfusion"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # parseTime=true 必须（time 字段）；用 root（MYSQL_DATABASE 仅建库，不建非 root 用户）
+      TEST_MYSQL_DSN: "root:fusion@tcp(localhost:3306)/fusion_test?parseTime=true&multiStatements=true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Vet (mysql tag)
+        run: go vet -tags mysql ./...
+      - name: Test
+        run: go test -tags mysql -v -timeout 120s -run "TestMySQL_" .
