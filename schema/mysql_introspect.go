@@ -118,7 +118,7 @@ SELECT rc.constraint_name,
 FROM information_schema.referential_constraints rc
 JOIN information_schema.key_column_usage kcu
   ON rc.constraint_name = kcu.constraint_name
- AND rc.table_schema = kcu.table_schema
+ AND rc.constraint_schema = kcu.table_schema
  AND rc.table_name = kcu.table_name
 WHERE rc.constraint_schema = DATABASE() AND rc.table_name = ?
 ORDER BY rc.constraint_name, kcu.ordinal_position`, table)
