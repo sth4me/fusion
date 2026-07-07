@@ -301,3 +301,7 @@ fusion.AutoRegisterRelations(cat)
 ## 支持的 Go 版本
 
 Go 1.26+（Go 1.27 泛型方法增强为远期可选项）。
+
+## License
+
+MIT（见 [LICENSE](LICENSE)）。
