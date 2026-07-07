@@ -31,6 +31,15 @@ func assignReflect(rv reflect.Value, src any) error {
 		}
 	}
 
+	// bool 特殊处理：SQLite/MySQL 把 BOOLEAN 存为 INTEGER(0/1)，
+	// 驱动返回 int64/int/[]byte，不能直接 Convert 到 bool。按"非零=true"转换。
+	if rv.Kind() == reflect.Bool {
+		if b, ok := scanBoolFromIntish(src); ok {
+			rv.SetBool(b)
+			return nil
+		}
+	}
+
 	srcVal := reflect.ValueOf(src)
 	// 直接类型匹配
 	if srcVal.Type().AssignableTo(rv.Type()) {
@@ -45,6 +54,38 @@ func assignReflect(rv reflect.Value, src any) error {
 	return fmt.Errorf("fusion: cannot scan %T into %s", src, rv.Type())
 }
 
+// scanBoolFromIntish 把整数类源值（int64/int/[]byte数字/string数字）转 bool。
+// 非 0 → true；0 → false。非整数类返回 (false, false)。
+func scanBoolFromIntish(src any) (bool, bool) {
+	switch x := src.(type) {
+	case int64:
+		return x != 0, true
+	case int:
+		return x != 0, true
+	case int32:
+		return x != 0, true
+	case []byte:
+		// "1"/"0"/"true"/"false" 等
+		s := string(x)
+		if s == "1" || s == "true" || s == "TRUE" || s == "t" || s == "T" {
+			return true, true
+		}
+		if s == "0" || s == "false" || s == "FALSE" || s == "f" || s == "F" {
+			return false, true
+		}
+		return false, false
+	case string:
+		if x == "1" || x == "true" || x == "TRUE" {
+			return true, true
+		}
+		if x == "0" || x == "false" || x == "FALSE" {
+			return false, true
+		}
+		return false, false
+	}
+	return false, false
+}
+
 // assignTime 把 src（可能是 time.Time、string、[]byte）赋给 time.Time 字段。
 func assignTime(rv reflect.Value, src any) error {
 	switch x := src.(type) {
@@ -57,14 +98,21 @@ func assignTime(rv reflect.Value, src any) error {
 			return nil
 		}
 		// 回退到其他常见格式
-		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+		for _, layout := range []string{
+			time.RFC3339,
+			"2006-01-02 15:04:05.999999999 -0700 MST", // Go time.Time.String() 带小数秒
+			"2006-01-02 15:04:05 -0700 MST",           // Go time.Time.String() 无小数秒
+			"2006-01-02 15:04:05",
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02",
+		} {
 			if t, err := time.Parse(layout, x); err == nil {
 				rv.Set(reflect.ValueOf(t))
 				return nil
 			}
 		}
 		// 解析全部失败：返回 error 而非静默置零（避免数据损坏无感知）。
-		return fmt.Errorf("fusion: cannot parse time %q into time.Time (tried RFC3339Nano, RFC3339, 2006-01-02 15:04:05, 2006-01-02)", x)
+		return fmt.Errorf("fusion: cannot parse time %q into time.Time (tried common layouts)", x)
 	case []byte:
 		return assignTime(rv, string(x))
 	}
