@@ -318,6 +318,11 @@ func TestIsRetryableTxError(t *testing.T) {
 		{errors.New("try restarting transaction"), true},
 		{errors.New("some unrelated error"), false},
 		{errors.New("connection refused"), false},
+		// H1 回归：裸数字/端口号/耗时不应误判为可重试
+		{errors.New("dial tcp: connection :1213 refused"), false},
+		{errors.New("query took 1213ms"), false},
+		{errors.New("id=1213 not found"), false},
+		{errors.New("port 1205 closed"), false},
 	}
 	for _, c := range cases {
 		if got := isRetryableTxError(c.err); got != c.want {

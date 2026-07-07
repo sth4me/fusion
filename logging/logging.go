@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"fusion/expr"
 )
 
 // QueryInfo 携带一次 SQL 执行的全部信息，传给 QueryHook 并用于日志记录。
@@ -253,15 +255,23 @@ func (h discardHandler) WithGroup(string) slog.Handler               { return h 
 //   - col OP ?          （OP ∈ =, <>, !=, >, >=, <, <=, LIKE, IS）
 //   - col IN (?, ?, ...)（区间内所有 ? 都归到 col）
 //   - col BETWEEN ? AND ?
-//
-// 不支持（保守留空，不脱敏）：INSERT INTO t (...) VALUES (...)、复杂表达式中的占位符。
+//   - INSERT INTO t (col1, col2, ...) VALUES (?, ?), (?, ?)...（按列位置循环映射）
 func mapPlaceholdersToColumns(sqlStr string) []string {
+	// INSERT 路径：解析列列表 + VALUES 区域，按位置循环映射占位符到列名
+	if cols, ok := parseInsertColumns(sqlStr); ok {
+		return mapInsertPlaceholders(sqlStr, cols)
+	}
 	var out []string
 	low := strings.ToLower(sqlStr)
 	i := 0
 	n := len(sqlStr)
 	currentCol := "" // 当前生效的列名上下文
 	for i < n {
+		// 跳过字符串字面量/注释（其内的 ?/$N 不是占位符，也不影响列上下文）
+		if next := expr.SkipNonCode(sqlStr, i); next > i {
+			i = next
+			continue
+		}
 		ch := sqlStr[i]
 		// 占位符 ? 或 $N
 		if ch == '?' {
@@ -354,4 +364,100 @@ func hasPrefixAny(s string, prefixes ...string) bool {
 		}
 	}
 	return false
+}
+
+// parseInsertColumns 尝试从 `INSERT INTO <table> (col1, col2, ...) VALUES` 中
+// 解析出列名列表。匹配返回 (cols, true)；否则 (nil, false)。
+// 仅识别显式列列表形式；`INSERT INTO t VALUES`（无列列表）返回 false。
+func parseInsertColumns(sqlStr string) ([]string, bool) {
+	low := strings.ToLower(sqlStr)
+	// 找 "insert into"
+	idx := strings.Index(low, "insert into")
+	if idx != 0 {
+		return nil, false
+	}
+	// 跳过 "insert into" + 表名（到第一个 '(' ）
+	i := idx + len("insert into")
+	for i < len(sqlStr) && sqlStr[i] != '(' {
+		i++
+	}
+	if i >= len(sqlStr) {
+		return nil, false
+	}
+	// 解析 () 内的列名（逗号分隔，去空白）
+	i++ // 跳过 '('
+	colStart := i
+	var cols []string
+	depth := 0
+	for i < len(sqlStr) {
+		// 跳过字面量/注释（避免表名带引号等干扰）
+		if next := expr.SkipNonCode(sqlStr, i); next > i {
+			i = next
+			continue
+		}
+		c := sqlStr[i]
+		if c == '(' {
+			depth++
+		} else if c == ')' {
+			if depth == 0 {
+				// 列列表结束
+				if colStart < i {
+					cols = append(cols, strings.TrimSpace(sqlStr[colStart:i]))
+				}
+				return cols, len(cols) > 0
+			}
+			depth--
+		} else if c == ',' && depth == 0 {
+			cols = append(cols, strings.TrimSpace(sqlStr[colStart:i]))
+			colStart = i + 1
+		}
+		i++
+	}
+	return nil, false
+}
+
+// mapInsertPlaceholders 在 INSERT 语句的 VALUES 区域内，按列位置循环把占位符映射到列名。
+// 形如 INSERT INTO t (a, b) VALUES (?, ?), (?, ?) → [a, b, a, b]。
+// VALUES 区域以 "values" 关键字后开始；非占位符的字面量（如 NULL、数字）跳过但不占列位。
+func mapInsertPlaceholders(sqlStr string, cols []string) []string {
+	low := strings.ToLower(sqlStr)
+	vIdx := strings.Index(low, " values")
+	if vIdx < 0 {
+		vIdx = strings.Index(low, ") values")
+	}
+	if vIdx < 0 {
+		return nil
+	}
+	// 从 values 后开始扫描占位符
+	i := vIdx + 7
+	if i > len(sqlStr) {
+		i = len(sqlStr)
+	}
+	var out []string
+	colPos := 0 // 当前占位符在列列表中的位置（循环）
+	for i < len(sqlStr) {
+		if next := expr.SkipNonCode(sqlStr, i); next > i {
+			i = next
+			continue
+		}
+		c := sqlStr[i]
+		if c == '?' {
+			out = append(out, cols[colPos%len(cols)])
+			colPos++
+			i++
+			continue
+		}
+		if c == '$' && i+1 < len(sqlStr) && sqlStr[i+1] >= '1' && sqlStr[i+1] <= '9' {
+			j := i + 1
+			for j < len(sqlStr) && sqlStr[j] >= '0' && sqlStr[j] <= '9' {
+				j++
+			}
+			out = append(out, cols[colPos%len(cols)])
+			colPos++
+			i = j
+			continue
+		}
+		i++
+	}
+	return out
 }

@@ -121,13 +121,13 @@ func (c Col[T]) Like(v T) expr.Expr { return c.compareExpr("LIKE", v) }
 // NotLike 生成不匹配表达式（NOT LIKE）。
 func (c Col[T]) NotLike(v T) expr.Expr { return c.compareExpr("NOT LIKE", v) }
 
-// EqDistinct 生成 NULL 安全等于（IS NOT DISTINCT FROM）。
+// EqDistinct 生成 NULL 安全等于。
 // 与 Eq 不同：当值为 NULL 时，Eq 生成 "col = NULL"（永假），EqDistinct 正确匹配 NULL。
-// PG/SQLite 原生支持；MySQL 不支持 IS NOT DISTINCT FROM（文档注明回退到 <=>）。
-func (c Col[T]) EqDistinct(v T) expr.Expr { return c.compareExpr("IS NOT DISTINCT FROM", v) }
+// 方言感知：PG/SQLite 用 "IS NOT DISTINCT FROM"；MySQL 用 "<=>"。
+func (c Col[T]) EqDistinct(v T) expr.Expr { return expr.LeafDistinct(c.ref(), v, false) }
 
-// NeDistinct 生成 NULL 安全不等（IS DISTINCT FROM）。
-func (c Col[T]) NeDistinct(v T) expr.Expr { return c.compareExpr("IS DISTINCT FROM", v) }
+// NeDistinct 生成 NULL 安全不等（IS DISTINCT FROM / NOT <=>）。
+func (c Col[T]) NeDistinct(v T) expr.Expr { return expr.LeafDistinct(c.ref(), v, true) }
 
 // In 生成 IN 表达式。
 func (c Col[T]) In(vs []T) expr.Expr {

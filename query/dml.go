@@ -240,6 +240,14 @@ func (i *Inserter[T]) execBatch(ctx context.Context) error {
 	}
 
 	returningCols := i.returningCols()
+
+	// MySQL 等无 RETURNING 的方言：批量插入只能拿 LastInsertId（仅首行主键），
+	// 多行时其余行主键无法回填。为正确性，此时退化为逐行插入（每行独立 LastInsertId）。
+	// RETURNING 方言（PG/SQLite）走批量 RETURNING 路径，不受影响。
+	if !i.d.SupportsReturning() && len(returningCols) > 0 && len(i.targets) > 1 {
+		return i.execBatchRowByRow(ctx)
+	}
+
 	q := builder.InsertQuery{
 		Cols:          cols,
 		ReturningCols: returningCols,
@@ -264,6 +272,53 @@ func (i *Inserter[T]) execBatch(ctx context.Context) error {
 
 	// AfterCreate 钩子逐条触发
 	for _, t := range i.targets {
+		if err := hook.Trigger(ctx, t, hook.AfterCreate); err != nil {
+			return fmt.Errorf("fusion: AfterCreate hook: %w", err)
+		}
+	}
+	return nil
+}
+
+// execBatchRowByRow 在无 RETURNING 的方言（MySQL）上逐行插入，正确回填每行主键。
+// 由 execBatch 在 !SupportsReturning() && 多行时调用。每行独立 INSERT + LastInsertId。
+// 性能低于批量，但保证每行的自增主键正确回填（避免 C3：批量只回填首行）。
+func (i *Inserter[T]) execBatchRowByRow(ctx context.Context) error {
+	returningCols := i.returningCols()
+	for _, t := range i.targets {
+		cols, vals, err := i.collectSetCols(t)
+		if err != nil {
+			return err
+		}
+		q := builder.InsertQuery{
+			Cols:          cols,
+			ReturningCols: returningCols,
+			DoUpsert:      i.doUpsert,
+			ConflictCols:  i.conflictFields,
+			UpdateCols:    i.updateFields,
+		}
+		sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
+		start := time.Now()
+		res, execErr := i.execer.ExecContext(ctx, sqlStr, args...)
+		var rowsAffected int64
+		if execErr == nil && res != nil {
+			rowsAffected, _ = res.RowsAffected()
+		}
+		logging.LogQuery(ctx, logging.QueryInfo{Op: "INSERT", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: execErr})
+		if execErr != nil {
+			return fmt.Errorf("fusion: insert: %w (sql=%s)", execErr, sqlStr)
+		}
+		// 回填主键（LastInsertId）
+		if len(returningCols) > 0 && res != nil {
+			if id, e := res.LastInsertId(); e == nil {
+				dest := i.scanDestForColsTarget(t, returningCols)
+				for _, d := range dest {
+					if sc, ok := d.(sqlScannerLocal); ok {
+						_ = sc.Scan(id)
+					}
+				}
+			}
+		}
+		// AfterCreate 逐行触发（与批量路径语义一致）
 		if err := hook.Trigger(ctx, t, hook.AfterCreate); err != nil {
 			return fmt.Errorf("fusion: AfterCreate hook: %w", err)
 		}

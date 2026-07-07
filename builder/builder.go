@@ -30,6 +30,9 @@ func (r *renderer) NextPlaceholder() string {
 	return r.d.Placeholder(r.phIdx)
 }
 
+// DialectName 实现 expr.DialectNamer，供 EqDistinct 等方言感知表达式查询。
+func (r *renderer) DialectName() string { return r.d.Name() }
+
 func (r *renderer) AddParam(v any) { r.args = append(r.args, v) }
 
 // QuoteCol 引用列引用。输入形如 "表名.列名" 或 "列名"。
@@ -286,6 +289,12 @@ func rewritePlaceholdersInto(r *renderer, sqlStr string, args []any) string {
 	argIdx := 0
 	i := 0
 	for i < len(sqlStr) {
+		// 跳过字符串字面量/注释（其内的 ?/$N 不是占位符）
+		if next := expr.SkipNonCode(sqlStr, i); next > i {
+			out.WriteString(sqlStr[i:next])
+			i = next
+			continue
+		}
 		ch := sqlStr[i]
 		if ch == '?' {
 			if argIdx < len(args) {

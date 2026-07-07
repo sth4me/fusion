@@ -200,22 +200,28 @@ func runTop(ctx context.Context, db Beginner, mode Mode, opts *Options, fn func(
 
 // isRetryableTxError 判断错误是否为可重试的事务错误（死锁/序列化失败）。
 // 通过字符串匹配识别 PG/MySQL 的 SQLState，避免引入驱动依赖。
+// isRetryableTxError 判断错误是否为可重试的事务错误（死锁/序列化失败）。
+//
+// 用带语义上下文的字符串匹配，避免裸数字（"1213"/"1205"）误判端口号/耗时/ID 等无关文本。
+// 理想方案是驱动 typed error（pgconn.PgError.SQLState / mysql.MySQLError.Number），
+// 但为避免引入驱动依赖，当前覆盖主流驱动的错误文本形态：
+//   - PG:   "SQLSTATE 40P01"、"ERROR: deadlock detected"、"could not serialize access"
+//   - MySQL:"Error 1213"、"Deadlock found"、"try restarting transaction"、"Lock wait timeout"
 func isRetryableTxError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// 解开包装
 	msg := err.Error()
-	// PG: 40P01(deadlock_detected) 40P02(serialization_failure) 40001(serialization_failure)
-	// MySQL: 1213(deadlock) 1205(lock wait timeout) Error 1062 重复键不重试
 	retryable := []string{
-		"40P01", "40P02", "40001", // PG SQLSTATE
-		"Error 1213", "1213", // MySQL deadlock
-		"Error 1205", "1205", // MySQL lock wait timeout
-		"deadlock", "Deadlock",
+		"40P01", "40P02", "40001", // PG SQLSTATE（5 位码，误判概率极低）
+		"Error 1213",         // MySQL deadlock（带 "Error " 前缀）
+		"Error 1205",         // MySQL lock wait timeout
+		"deadlock detected",  // PG 文本
+		"Deadlock found",     // MySQL 文本
 		"try restarting transaction",
 		"could not serialize access",
 		"serialization failure",
+		"Lock wait timeout exceeded",
 	}
 	for _, s := range retryable {
 		if strings.Contains(msg, s) {

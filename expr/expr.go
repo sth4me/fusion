@@ -37,6 +37,13 @@ type Renderer interface {
 	QuoteCol(tableCol string) string
 }
 
+// DialectNamer 是 Renderer 可选实现的接口，供需要方言感知的表达式（如 EqDistinct
+// 的 NULL 安全比较）查询当前方言名。未实现时表达式退化为标准 SQL（PG/SQLite 兼容）。
+// builder.renderer 实现；测试用 mini renderer 可不实现（走默认分支）。
+type DialectNamer interface {
+	DialectName() string
+}
+
 // paramCollector 由 builder 实现，render 时按遍历顺序收集参数。
 // （已合并进 Renderer，保留接口名供旧代码引用兼容。）
 type paramCollector = Renderer
@@ -168,6 +175,14 @@ func LeafRawSQL(leftExpr, op string, param any) Expr {
 	return Expr{n: rawLeafNode{left: leftExpr, op: op, param: param}}
 }
 
+// LeafDistinct 构造 NULL 安全比较（EqDistinct/NeDistinct 用）。
+// negate=false → "IS NOT DISTINCT FROM"（PG/SQLite）；MySQL 退化为 "<=>"。
+// negate=true  → "IS DISTINCT FROM"（PG/SQLite）；MySQL 退化为 "NOT <=>".
+// 渲染时按 Renderer 的方言选操作符（实现 DialectNamer 时取方言名，否则标准 SQL）。
+func LeafDistinct(col string, param any, negate bool) Expr {
+	return Expr{n: distinctLeafNode{col: col, param: param, negate: negate}}
+}
+
 // LeafBetween 生成 BETWEEN/NOT BETWEEN 表达式。
 func LeafBetween(col string, lo, hi any, negate bool) Expr {
 	return Expr{n: betweenNode{col: col, lo: lo, hi: hi, negate: negate}}
@@ -202,6 +217,36 @@ func (rawLeafNode) kind() nodeKind { return kindLeaf }
 func (r rawLeafNode) render(_ nodeKind, d Renderer) string {
 	d.AddParam(r.param)
 	return r.left + " " + r.op + " " + d.NextPlaceholder()
+}
+
+// distinctLeafNode 是 NULL 安全比较节点（EqDistinct/NeDistinct）。
+// 渲染时按方言选操作符：MySQL 用 <=> / NOT <=>；其他（PG/SQLite）用 IS NOT DISTINCT FROM。
+type distinctLeafNode struct {
+	col    string
+	param  any
+	negate bool // true = 不等（IS DISTINCT FROM / NOT <=>）
+}
+
+func (distinctLeafNode) kind() nodeKind { return kindLeaf }
+func (n distinctLeafNode) render(_ nodeKind, d Renderer) string {
+	op := "IS NOT DISTINCT FROM"
+	if n.negate {
+		op = "IS DISTINCT FROM"
+	}
+	// 方言感知：MySQL 用 <=> 语法
+	if dn, ok := d.(DialectNamer); ok && dn.DialectName() == "mysql" {
+		if n.negate {
+			op = "<=>" // 不等用 NOT(col <=> ?)，简化为下面处理
+		} else {
+			op = "<=>"
+		}
+	}
+	d.AddParam(n.param)
+	// MySQL 的 NOT <=> 需要写成 NOT (col <=> ?)；IS DISTINCT FROM 直接 col IS DISTINCT FROM ?
+	if n.negate && op == "<=>" {
+		return "NOT (" + d.QuoteCol(n.col) + " <=> " + d.NextPlaceholder() + ")"
+	}
+	return d.QuoteCol(n.col) + " " + op + " " + d.NextPlaceholder()
 }
 
 // LeafMulti 用列名、运算符、多值参数构造叶节点（用于 IN）。
@@ -329,6 +374,12 @@ func rewritePlaceholders(subSQL string, args []any, d Renderer) string {
 	out := make([]byte, 0, len(subSQL)+len(args)*4)
 	argIdx := 0
 	for i := 0; i < len(subSQL); {
+		// 跳过字符串字面量/注释（其内的 ?/$N 不是占位符）
+		if next := SkipNonCode(subSQL, i); next > i {
+			out = append(out, subSQL[i:next]...)
+			i = next
+			continue
+		}
 		c := subSQL[i]
 		if c == '?' {
 			// MySQL/SQLite 风格占位符
@@ -358,4 +409,58 @@ func rewritePlaceholders(subSQL string, args []any, d Renderer) string {
 		i++
 	}
 	return string(out)
+}
+
+// SkipNonCode 报告从索引 i 开始是否是字符串字面量（'...'）、行注释（-- ...）或
+// 块注释（/* ... */）。若是，返回该结构结束后的索引；否则返回 i（原样）。
+//
+// 用于占位符扫描器（rewritePlaceholders / rewritePlaceholdersInto /
+// mapPlaceholdersToColumns）跳过字面量/注释内部的 ? 或 $N，避免误判。
+//
+// SQL 标准字符串字面量用单引号，转义为 ''（双单引号）；不支持反斜杠转义
+// （MySQL 默认开启 NO_BACKSLASH_ESCAPES 之外的行为，但标准 SQL 用 ''）。
+func SkipNonCode(sql string, i int) int {
+	if i >= len(sql) {
+		return i
+	}
+	switch sql[i] {
+	case '\'':
+		// 跳到匹配的结束 '（'' 是转义，继续）
+		j := i + 1
+		for j < len(sql) {
+			if sql[j] == '\'' {
+				if j+1 < len(sql) && sql[j+1] == '\'' {
+					j += 2 // 转义的单引号
+					continue
+				}
+				return j + 1
+			}
+			j++
+		}
+		return j // 未闭合，跳到末尾
+	case '-':
+		if i+1 < len(sql) && sql[i+1] == '-' {
+			// 行注释：跳到 \n
+			j := i + 2
+			for j < len(sql) && sql[j] != '\n' {
+				j++
+			}
+			return j
+		}
+		return i
+	case '/':
+		if i+1 < len(sql) && sql[i+1] == '*' {
+			// 块注释：跳到 */
+			j := i + 2
+			for j+1 < len(sql) {
+				if sql[j] == '*' && sql[j+1] == '/' {
+					return j + 2
+				}
+				j++
+			}
+			return len(sql)
+		}
+		return i
+	}
+	return i
 }

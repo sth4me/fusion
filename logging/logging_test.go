@@ -284,3 +284,45 @@ func TestRedactionDisable(t *testing.T) {
 		t.Errorf("redaction disabled: arg should be original, got %v", got[0])
 	}
 }
+
+// TestRedactArgs_LiteralQuestionMark 字符串字面量内的 ? 不被当占位符（C2 回归）。
+// 如 WHERE body LIKE '%问题?' 中字面量里的 ? 不应消耗参数。
+func TestRedactArgs_LiteralQuestionMark(t *testing.T) {
+	AddSensitiveColumn("password")
+	// SQL 里只有一个真占位符（password = ?），LIKE '%问题?' 里的 ? 在字面量内不算
+	args := []any{"secret"}
+	got := redactArgs(`WHERE password = ? AND body LIKE '%问题?'`, args)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 arg mapped, got %d (literal ? leaked as placeholder)", len(got))
+	}
+	if got[0] != "***" {
+		t.Errorf("password should be redacted, got %v", got[0])
+	}
+}
+
+// TestRedactArgs_InsertValues INSERT VALUES 的敏感列脱敏（C4 回归）。
+// INSERT INTO users(name, password) VALUES (?, ?) → password 位置脱敏。
+func TestRedactArgs_InsertValues(t *testing.T) {
+	AddSensitiveColumn("password")
+	args := []any{"alice", "secret-pw"}
+	got := redactArgs(`INSERT INTO users(name, password) VALUES (?, ?)`, args)
+	if got[0] != "alice" {
+		t.Errorf("name should NOT be redacted, got %v", got[0])
+	}
+	if got[1] != "***" {
+		t.Errorf("password should be redacted, got %v", got[1])
+	}
+}
+
+// TestRedactArgs_InsertValuesMultiRow 多行 INSERT 按列循环映射。
+func TestRedactArgs_InsertValuesMultiRow(t *testing.T) {
+	AddSensitiveColumn("password")
+	args := []any{"a1", "p1", "a2", "p2"}
+	got := redactArgs(`INSERT INTO users(name, password) VALUES (?, ?), (?, ?)`, args)
+	if got[0] != "a1" || got[2] != "a2" {
+		t.Errorf("names should NOT be redacted, got %v", got)
+	}
+	if got[1] != "***" || got[3] != "***" {
+		t.Errorf("passwords should be redacted, got %v", got)
+	}
+}

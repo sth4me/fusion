@@ -195,3 +195,33 @@ func TestColCol(t *testing.T) {
 		t.Errorf("args got %v, want none", args)
 	}
 }
+
+// TestSkipNonCode 验证占位符扫描器跳过字符串字面量/注释的辅助函数。
+// 这直接关系到 C2：CTE/子查询/脱敏扫描器不能把字面量里的 ? 当占位符。
+func TestSkipNonCode(t *testing.T) {
+	cases := []struct {
+		sql  string
+		i    int
+		want int // 跳过后应到的索引；== i 表示该位置非字面量/注释
+	}{
+		// 字符串字面量（' 在索引 10，闭合 ' 在索引 12，返回 13）
+		{`WHERE x = '?' AND y = ?`, 10, 13},
+		{`'it''s ok'`, 0, 10},                  // 转义单引号 '' → 结束于 10（len）
+		{`'unclosed`, 0, 9},                    // 未闭合跳到末尾（len=9）
+		// 行注释（从 0 起，到 \n 前结束；用真实换行符）
+		{"-- comment ?\nx = ?", 0, 12},
+		// 块注释
+		{`/* a ? b */ x = ?`, 0, 11},           // 块注释到 */ 后（索引 11）
+		// 非字面量/注释：返回原 i
+		{`x = ?`, 0, 0},
+		{`x = ?`, 4, 4},
+		{`a - b`, 2, 2},                        // 单个 - 不是注释
+		{`a / b`, 2, 2},                        // 单个 / 不是块注释
+	}
+	for _, c := range cases {
+		got := SkipNonCode(c.sql, c.i)
+		if got != c.want {
+			t.Errorf("SkipNonCode(%q, %d) = %d, want %d", c.sql, c.i, got, c.want)
+		}
+	}
+}

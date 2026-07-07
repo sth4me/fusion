@@ -2,6 +2,7 @@ package col
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,6 +110,38 @@ func TestAllComparisons(t *testing.T) {
 		if got := tc.expr(); got != want {
 			t.Errorf("op %s got %q, want %q", tc.op, got, want)
 		}
+	}
+}
+
+// r2mysql 是带方言名（mysql）的测试 renderer，验证 EqDistinct 的 MySQL 路径。
+type r2mysql struct{ r2 }
+
+func (r2mysql) DialectName() string { return "mysql" }
+
+// TestEqDistinct 方言感知：标准 SQL 用 IS NOT DISTINCT FROM；MySQL 用 <=>。
+func TestEqDistinct(t *testing.T) {
+	var c Col[*string] // 可空列
+	c.col, c.table = "email", "users"
+
+	// 标准 renderer（不实现 DialectNamer）→ PG/SQLite 语法
+	std := c.EqDistinct(nil).Render(&r2{})
+	if !strings.Contains(std, "IS NOT DISTINCT FROM") {
+		t.Errorf("standard dialect got %q, want IS NOT DISTINCT FROM", std)
+	}
+	stdNe := c.NeDistinct(nil).Render(&r2{})
+	if !strings.Contains(stdNe, "IS DISTINCT FROM") {
+		t.Errorf("standard NeDistinct got %q, want IS DISTINCT FROM", stdNe)
+	}
+
+	// MySQL renderer → <=> 语法
+	mysqlR := &r2mysql{}
+	mysql := c.EqDistinct(nil).Render(mysqlR)
+	if !strings.Contains(mysql, "<=>") || strings.Contains(mysql, "DISTINCT") {
+		t.Errorf("mysql EqDistinct got %q, want <=>", mysql)
+	}
+	mysqlNe := c.NeDistinct(nil).Render(&r2mysql{})
+	if !strings.Contains(mysqlNe, "NOT (") || !strings.Contains(mysqlNe, "<=>") {
+		t.Errorf("mysql NeDistinct got %q, want NOT (... <=> ...)", mysqlNe)
 	}
 }
 

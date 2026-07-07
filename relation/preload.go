@@ -329,6 +329,11 @@ func preloadManyToMany(ctx context.Context, execer Execer, d dialect.Dialect, rv
 	if rm.JoinMeta == nil {
 		return fmt.Errorf("fusion: m2m missing JoinMeta")
 	}
+	// ChildType 为 nil 时 reflect.SliceOf(nil) 会 panic；返回 error 而非崩溃。
+	// 触发条件：m2m 注册时子类型未通过 meta.Register 注册（inferChildType 返回 nil）。
+	if rm.ChildType == nil {
+		return fmt.Errorf("fusion: m2m Preload: child type not resolved (is the child model registered?)")
+	}
 	// 1. 收集父主键
 	parentKeys := collectFieldValues(rv, rm.RefIndex)
 	if len(parentKeys) == 0 {

@@ -93,9 +93,9 @@ func WithTxRetry(max int, base, maxDelay time.Duration) Option {
 func New(db *sql.DB, opts ...Option) *Engine {
 	e := &Engine{
 		db:      db,
-		dialect: defaultDialect, // 兜底用当前全局默认
-		txMode:  0,              // 0 = 用 tx.DefaultMode()
-		slow:    -1,             // -1 = 用全局慢阈值
+		dialect: DefaultDialect(), // 加锁读取（避免与 SetDefaultDialect/Open 的 data race）
+		txMode:  0,                // 0 = 用 tx.DefaultMode()
+		slow:    -1,               // -1 = 用全局慢阈值
 	}
 	for _, opt := range opts {
 		opt(e)
