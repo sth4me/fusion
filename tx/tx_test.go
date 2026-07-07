@@ -330,3 +330,32 @@ func TestIsRetryableTxError(t *testing.T) {
 		}
 	}
 }
+
+// TestIsRetryableError_RealDriverText 用贴近真实 PG/MySQL 驱动的错误文本验证匹配。
+// 这些是驱动在实际死锁时返回的文本形态（pgconn.PgError / mysql.MySQLError 的 Error()）。
+func TestIsRetryableError_RealDriverText(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		// pgx 驱动真实文本：ERROR: deadlock detected (SQLSTATE 40P01)
+		{"pg deadlock", errors.New("ERROR: deadlock detected (SQLSTATE 40P01)"), true},
+		// pg 序列化失败
+		{"pg serial", errors.New("ERROR: could not serialize access due to concurrent update (SQLSTATE 40001)"), true},
+		// go-sql-driver/mysql 真实文本：Error 1213: Deadlock found...
+		{"mysql deadlock", errors.New("Error 1213: Deadlock found when trying to get lock; try restarting transaction"), true},
+		// mysql lock wait timeout
+		{"mysql lockwait", errors.New("Error 1205: Lock wait timeout exceeded; try restarting transaction"), true},
+		// 非重试able：唯一键冲突、连接拒绝
+		{"unique violation", errors.New("Error 1062: Duplicate entry 'x' for key 'uni'"), false},
+		{"conn refused", errors.New("dial tcp: connection refused"), false},
+		{"port in msg", errors.New("connected to host:3306 but auth failed"), false},
+		{"duration in msg", errors.New("query took 1205ms"), false},
+	}
+	for _, c := range cases {
+		if got := IsRetryableError(c.err); got != c.want {
+			t.Errorf("%s: IsRetryableError(%q) = %v, want %v", c.name, c.err, got, c.want)
+		}
+	}
+}

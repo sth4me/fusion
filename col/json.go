@@ -4,16 +4,19 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+
+	"fusion/meta"
 )
 
 // Json 是 JSON 字段包装类型，用于 PostgreSQL jsonb / MySQL JSON / SQLite TEXT(json)。
 // 用法：声明模型字段为 orm.Json[YourStruct] 或 orm.Json[[]string]，框架自动
 // 在写入时 json.Marshal、读取时 json.Unmarshal。
 //
-// 零侵入：Json 实现 driver.Valuer + sql.Scanner，复用 Col[T] 的现有序列化路径。
+// 零侵入：Json 实现 driver.Valuer + sql.Scanner + FieldDescriptor，复用 Col[T] 的序列化路径。
 type Json[T any] struct {
 	V    T
 	set  bool
+	col  string // 列名（由 meta.Register 经 SetMeta 填充）
 }
 
 // Set 设置值。
@@ -28,8 +31,11 @@ func (j *Json[T]) IsSet() bool { return j.set }
 // SQLValue 返回 SQL 值（JSON 字节），供 DML 参数使用。
 func (j *Json[T]) SQLValue() (any, error) { return j.Value() }
 
-// ColName 占位（Json 不直接作为 Col 字段描述符，但满足 fieldValuer 接口兼容）。
-func (j *Json[T]) ColName() string { return "" }
+// ColName 返回列名（由 meta.Register 填充）。
+func (j *Json[T]) ColName() string { return j.col }
+
+// SetMeta 由 meta.Register 反射调用，填充列名（实现 FieldDescriptor）。
+func (j *Json[T]) SetMeta(m meta.FieldMeta) { j.col = m.Column }
 
 // Value 实现 driver.Valuer，把 V 序列化为 JSON。
 func (j Json[T]) Value() (driver.Value, error) {

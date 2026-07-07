@@ -207,6 +207,10 @@ func runTop(ctx context.Context, db Beginner, mode Mode, opts *Options, fn func(
 // 但为避免引入驱动依赖，当前覆盖主流驱动的错误文本形态：
 //   - PG:   "SQLSTATE 40P01"、"ERROR: deadlock detected"、"could not serialize access"
 //   - MySQL:"Error 1213"、"Deadlock found"、"try restarting transaction"、"Lock wait timeout"
+// IsRetryableError 报告错误是否为可重试的事务错误（死锁/序列化失败）。
+// 导出版本，供应用层判断是否值得重试（fusion.TxWithOpts 内部也用此判断）。
+func IsRetryableError(err error) bool { return isRetryableTxError(err) }
+
 func isRetryableTxError(err error) bool {
 	if err == nil {
 		return false

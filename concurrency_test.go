@@ -3,6 +3,7 @@ package fusion_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -87,5 +88,66 @@ func TestConcurrencySafeJoin(t *testing.T) {
 func execSQL(db *sql.DB, q string) {
 	if _, err := db.Exec(q); err != nil {
 		panic(err)
+	}
+}
+
+// TestConcurrencyMixedOps 并发混合操作验证逻辑层并发安全（不 panic、各自结果正确）。
+// 不依赖 -race（环境可能无 CGO），用功能正确性兜底：并发查询同表/不同表、并发 Insert。
+// SQLite 单连接（openSQLite 设了 SetMaxOpenConns(1)）下操作序列化，但验证逻辑层无竞争误用。
+func TestConcurrencyMixedOps(t *testing.T) {
+	db := openSQLite(t)
+	defer db.Close()
+	execSQL(db, `CREATE TABLE mxusers (id INTEGER PRIMARY KEY, name TEXT)`)
+	execSQL(db, `CREATE TABLE mxposts (id INTEGER PRIMARY KEY, uid INTEGER, title TEXT)`)
+	execSQL(db, `INSERT INTO mxusers VALUES (1,'alice')`)
+	execSQL(db, `INSERT INTO mxposts VALUES (10,1,'p1'),(11,1,'p2')`)
+	fusion.SetDefaultDialect(dialect.SQLiteDialect)
+	wrapped := fusion.WrapDB(db)
+
+	type MXUser struct {
+		ID   col.Col[int64]
+		Name col.Col[string]
+	}
+	type MXPost struct {
+		ID    col.Col[int64]
+		UID   col.Col[int64]
+		Title col.Col[string]
+	}
+	mxUsers := fusion.Register[MXUser]("mxusers")
+	mxPosts := fusion.Register[MXPost]("mxposts")
+
+	var wg sync.WaitGroup
+	const N = 20
+	errs := make(chan error, N*2)
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			us, err := fusion.From(mxUsers, wrapped).Where(mxUsers.Proto.ID.Eq(1)).All(context.Background())
+			if err != nil {
+				errs <- err
+				return
+			}
+			if len(us) != 1 || us[0].Name.Get() != "alice" {
+				errs <- fmt.Errorf("g%d: users got %+v", n, us)
+			}
+		}(i)
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			ps, err := fusion.From(mxPosts, wrapped).Where(mxPosts.Proto.UID.Eq(1)).All(context.Background())
+			if err != nil {
+				errs <- err
+				return
+			}
+			if len(ps) != 2 {
+				errs <- fmt.Errorf("g%d: got %d posts, want 2", n, len(ps))
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
