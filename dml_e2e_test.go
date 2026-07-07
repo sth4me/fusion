@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // DMLUser 用于 DML 测试的模型

@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"fusion/expr"
+	"github.com/sth4me/fusion/expr"
 )
 
 // QueryInfo 携带一次 SQL 执行的全部信息，传给 QueryHook 并用于日志记录。

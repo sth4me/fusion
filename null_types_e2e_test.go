@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // NullProbe 覆盖各类可空字段类型（核心机制：set 标志 + 指针 nil = NULL）。

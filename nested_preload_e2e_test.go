@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/rel"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/rel"
 )
 
 // 嵌套预加载测试模型（独立模型，避免与 preload_e2e_test 的 PPost 缓存冲突）。

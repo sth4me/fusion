@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/expr"
-	"fusion/meta"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/meta"
 )
 
 type jUser struct {

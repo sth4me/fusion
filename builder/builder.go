@@ -8,9 +8,9 @@ package builder
 import (
 	"strings"
 
-	"fusion/dialect"
-	"fusion/expr"
-	"fusion/meta"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/meta"
 )
 
 // renderer 是 expr.Renderer 的实现，绑定方言与表名→别名映射。

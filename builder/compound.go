@@ -3,8 +3,8 @@ package builder
 import (
 	"strings"
 
-	"fusion/dialect"
-	"fusion/meta"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/meta"
 )
 
 // CompoundOp 是集合操作类型。

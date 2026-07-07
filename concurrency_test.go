@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // TestConcurrencySafeAs 验证多 goroutine 并发 From+As 不同别名不产生数据竞争

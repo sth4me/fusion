@@ -7,12 +7,12 @@ import (
 	"reflect"
 	"time"
 
-	"fusion/builder"
-	"fusion/dialect"
-	"fusion/expr"
-	"fusion/hook"
-	"fusion/logging"
-	"fusion/meta"
+	"github.com/sth4me/fusion/builder"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/hook"
+	"github.com/sth4me/fusion/logging"
+	"github.com/sth4me/fusion/meta"
 )
 
 // reflectValueElem 解引用 ptr 到 elem Value。

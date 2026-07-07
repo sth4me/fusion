@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"fusion/col"
-	"fusion/logging"
-	"fusion/meta"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/logging"
+	"github.com/sth4me/fusion/meta"
 )
 
 // tRow 是测试模型

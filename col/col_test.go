@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"fusion/expr"
-	"fusion/meta"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/meta"
 )
 
 // TestUser 用于 col 包测试（字段全包装）。

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // LogUser 用于日志测试的模型

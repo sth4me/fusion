@@ -6,11 +6,11 @@ import (
 	"log/slog"
 	"time"
 
-	"fusion/dialect"
-	"fusion/logging"
-	"fusion/meta"
-	"fusion/query"
-	"fusion/tx"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/logging"
+	"github.com/sth4me/fusion/meta"
+	"github.com/sth4me/fusion/query"
+	"github.com/sth4me/fusion/tx"
 )
 
 // Engine 承载连接相关状态（数据库、方言、可选 logger/慢阈值/事务默认选项）。

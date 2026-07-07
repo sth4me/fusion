@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"fusion/meta"
+	"github.com/sth4me/fusion/meta"
 )
 
 // Json 是 JSON 字段包装类型，用于 PostgreSQL jsonb / MySQL JSON / SQLite TEXT(json)。

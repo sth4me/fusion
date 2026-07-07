@@ -6,9 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // FUser 功能测试模型

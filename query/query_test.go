@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"fusion/builder"
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/meta"
+	"github.com/sth4me/fusion/builder"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/meta"
 )
 
 // qModel 测试模型

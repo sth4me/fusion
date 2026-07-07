@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"strings"
 
-	"fusion/logging"
-	"fusion/meta"
-	"fusion/relation"
+	"github.com/sth4me/fusion/logging"
+	"github.com/sth4me/fusion/meta"
+	"github.com/sth4me/fusion/relation"
 )
 
 // AutoRegisterRelations 扫描 Catalog 中所有外键，对未手动注册的关联自动调用

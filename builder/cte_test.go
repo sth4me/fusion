@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"fusion/dialect"
-	"fusion/meta"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/meta"
 )
 
 // cteTestModel 仅用于 BuildSELECT 的 ModelMeta 占位。

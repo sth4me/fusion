@@ -14,7 +14,7 @@ import (
 	"reflect"
 	"sync"
 
-	"fusion/meta"
+	"github.com/sth4me/fusion/meta"
 )
 
 // Kind 是关联类型。

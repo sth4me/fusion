@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"sync"
 
-	"fusion/dialect"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // Catalog 是一次内省的结果集：表名 → Table。

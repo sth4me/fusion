@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // 复合主键测试模型（user_id + role_id 联合主键）。

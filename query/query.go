@@ -15,14 +15,14 @@ import (
 	"strings"
 	"time"
 
-	"fusion/builder"
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/expr"
-	"fusion/logging"
-	"fusion/meta"
-	"fusion/relation"
-	"fusion/scan"
+	"github.com/sth4me/fusion/builder"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/logging"
+	"github.com/sth4me/fusion/meta"
+	"github.com/sth4me/fusion/relation"
+	"github.com/sth4me/fusion/scan"
 )
 
 // ErrNotFound 表示查询无结果。根包 fusion.ErrNotFound 是此别名。

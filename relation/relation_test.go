@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"testing"
 
-	"fusion/col"
-	"fusion/meta"
-	"fusion/rel"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/meta"
+	"github.com/sth4me/fusion/rel"
 )
 
 // 测试模型

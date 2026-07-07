@@ -11,8 +11,8 @@ package col
 import (
 	"database/sql/driver"
 
-	"fusion/expr"
-	"fusion/meta"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/meta"
 )
 
 // Col 是泛型字段描述符。

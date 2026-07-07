@@ -3,7 +3,7 @@ package col
 import (
 	"strings"
 
-	"fusion/expr"
+	"github.com/sth4me/fusion/expr"
 )
 
 // SelectItem 表示 SELECT 列表的一个投影项（普通列或聚合函数）。

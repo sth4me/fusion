@@ -3,9 +3,9 @@ package builder
 import (
 	"strings"
 
-	"fusion/dialect"
-	"fusion/expr"
-	"fusion/meta"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/meta"
 )
 
 // InsertQuery 描述 INSERT 语句的配置。

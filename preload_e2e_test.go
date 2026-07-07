@@ -6,10 +6,10 @@ import (
 	"errors"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/rel"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/rel"
 )
 
 // Preload 测试模型

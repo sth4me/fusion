@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"fusion/logging"
-	"fusion/meta"
+	"github.com/sth4me/fusion/logging"
+	"github.com/sth4me/fusion/meta"
 )
 
 // scanner 是可被 rows.Scan 接受的目标接口（即 sql.Scanner）。

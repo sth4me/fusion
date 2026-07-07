@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"fusion/builder"
-	"fusion/dialect"
-	"fusion/logging"
-	"fusion/meta"
-	"fusion/scan"
+	"github.com/sth4me/fusion/builder"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/logging"
+	"github.com/sth4me/fusion/meta"
+	"github.com/sth4me/fusion/scan"
 )
 
 // Compound 是集合复合查询（UNION/INTERSECT/EXCEPT）的可执行构建器。

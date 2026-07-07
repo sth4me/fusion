@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"strings"
 
-	"fusion/dialect"
-	"fusion/meta"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/meta"
 )
 
 // Execer 是 Preload 执行关联查询所需的接口（与 query.QueryExecer 一致）。

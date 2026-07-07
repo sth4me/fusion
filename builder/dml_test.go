@@ -3,9 +3,9 @@ package builder
 import (
 	"testing"
 
-	"fusion/dialect"
-	"fusion/expr"
-	"fusion/meta"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/meta"
 )
 
 type dmlModel struct {

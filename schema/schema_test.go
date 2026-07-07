@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"fusion/dialect"
+	"github.com/sth4me/fusion/dialect"
 
 	_ "modernc.org/sqlite"
 )

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/meta"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/meta"
 )
 
 // dmlTestModel 测试模型

@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/rel"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/rel"
 )
 
 // m2m 测试模型：User ↔ Tag 经 user_tags 连接表。

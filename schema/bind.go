@@ -3,7 +3,7 @@ package schema
 import (
 	"fmt"
 
-	"fusion/meta"
+	"github.com/sth4me/fusion/meta"
 )
 
 // DiffKind 描述模型与数据库 schema 之间的差异类型。

@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // RUser 剩余功能测试模型

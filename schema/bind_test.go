@@ -3,8 +3,8 @@ package schema
 import (
 	"testing"
 
-	"fusion/dialect"
-	"fusion/meta"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/meta"
 
 	_ "modernc.org/sqlite"
 )

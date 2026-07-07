@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"fusion/tx"
+	"github.com/sth4me/fusion/tx"
 )
 
 // ctxExecer 包装一个基础 DB，执行时若 ctx 中有事务则用事务，否则用基础 DB。

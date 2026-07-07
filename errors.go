@@ -1,6 +1,6 @@
 package fusion
 
-import "fusion/query"
+import "github.com/sth4me/fusion/query"
 
 // 哨兵错误（sentinel errors），支持 errors.Is 判断。
 // 业务代码可用 errors.Is(err, fusion.ErrNotFound) 区分"无结果"与"查询错误"。

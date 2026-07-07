@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // Engine 测试模型（独立，避免缓存冲突）。

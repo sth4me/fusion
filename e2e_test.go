@@ -6,9 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 
 	// 纯 Go SQLite 驱动（无 CGO）
 	_ "modernc.org/sqlite"

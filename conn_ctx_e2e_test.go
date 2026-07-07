@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
 )
 
 // CCItem 连接/取消测试模型。Name 用 int64，测试中插入非数字字符串触发 Scan 错误。

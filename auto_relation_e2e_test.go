@@ -5,11 +5,11 @@ import (
 	"database/sql"
 	"testing"
 
-	"fusion"
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/rel"
-	"fusion/relation"
+	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/rel"
+	"github.com/sth4me/fusion/relation"
 
 	_ "modernc.org/sqlite"
 )

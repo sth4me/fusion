@@ -12,17 +12,17 @@ import (
 	"sync"
 	"time"
 
-	"fusion/col"
-	"fusion/dialect"
-	"fusion/hook"
-	"fusion/logging"
-	"fusion/meta"
-	"fusion/schema"
-	"fusion/expr"
-	"fusion/relation"
-	"fusion/query"
-	"fusion/scan"
-	"fusion/tx"
+	"github.com/sth4me/fusion/col"
+	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/hook"
+	"github.com/sth4me/fusion/logging"
+	"github.com/sth4me/fusion/meta"
+	"github.com/sth4me/fusion/schema"
+	"github.com/sth4me/fusion/expr"
+	"github.com/sth4me/fusion/relation"
+	"github.com/sth4me/fusion/query"
+	"github.com/sth4me/fusion/scan"
+	"github.com/sth4me/fusion/tx"
 )
 
 // 默认方言（全局）。可由 SetDefaultDialect 修改；读写在 defaultDialectMu 下，
