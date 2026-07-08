@@ -83,6 +83,65 @@ func main() {
 }
 ```
 
+## 推荐项目结构
+
+真实项目里，模型类型和它的 `*Table` 变量建议放专门的 `model` 包，`main` 只负责连接和调用注册。
+这样业务层（service/handler）通过 `import model` 拿到全局 Table 变量，依赖单向、无循环。
+完整示例见 `examples/crud`。
+
+```
+yourapp/
+├── model/
+│   ├── user.go        // type User struct { ... }
+│   └── registry.go    // var Users *Table + func RegisterAll()
+├── service/
+│   └── user_service.go// import model; fusion.From(model.Users, db)
+└── main.go            // model.RegisterAll() 启动时调一次
+```
+
+```go
+// model/registry.go
+package model
+
+import "github.com/sth4me/fusion"
+
+var (
+    Users *fusion.Table  // 实际类型 *meta.Table[User]；初始 nil，RegisterAll 后赋值
+    Posts *fusion.Table
+)
+
+// RegisterAll 注册所有模型与关联，main 启动时调用一次。
+// 不放 init()：避免 import 副作用（任何 import model 都触发注册）；
+// 集中注册便于控制顺序（先模型后关联）和按环境传表名。
+func RegisterAll() {
+    Users = fusion.Register[User]("users")
+    Posts = fusion.Register[Post]("posts")
+    // 关联注册在此：fusion.HasMany(...)。注意先 Register 类型，再注册关联。
+}
+```
+
+```go
+// service/user_service.go
+package service
+
+import "yourapp/model"
+
+func GetUser(ctx context.Context, id int64) (*model.User, error) {
+    return fusion.From(model.Users, db).Where(model.Users.Proto.ID.Eq(id)).One(ctx)
+}
+```
+
+```go
+// main.go
+func main() {
+    db, _ := fusion.Open("sqlite", ":memory:", dialect.SQLiteDialect)
+    model.RegisterAll()  // 全局 Table 变量就绪
+    // ... 业务层用 model.Users 查询
+}
+```
+
+依赖方向单向：`service → model → fusion`，`model` 是叶子节点，任何上层 import 它拿 Table 变量，不会循环。
+
 ## 关联
 
 ```go
