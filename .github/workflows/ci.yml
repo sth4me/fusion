@@ -12,7 +12,7 @@ jobs:
     name: Test (SQLite)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
@@ -25,7 +25,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./...
       - name: Upload coverage
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-sqlite
           path: coverage.out
@@ -52,7 +52,7 @@ jobs:
     env:
       TEST_PG_DSN: "host=localhost port=5432 user=fusion password=fusion dbname=fusion_test sslmode=disable"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
@@ -83,7 +83,7 @@ jobs:
       # parseTime=true 必须（time 字段）；用 root（MYSQL_DATABASE 仅建库，不建非 root 用户）
       TEST_MYSQL_DSN: "root:fusion@tcp(localhost:3306)/fusion_test?parseTime=true&multiStatements=true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
