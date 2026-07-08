@@ -49,6 +49,7 @@ type Query[T any] struct {
 	alias      string               // 主表别名（Join/投影场景需要）
 	lockClause string               // 锁子句（FOR UPDATE 等）
 	ctes       []builder.CTESpec    // WITH 子句（CTE）
+	unscoped   bool                 // true=跳过软删除自动过滤（查询含已删除行）
 }
 
 // QueryExecer 抽象执行 SQL 的能力（*sql.DB 或 *sql.Tx 都满足）。
@@ -142,6 +143,13 @@ func (q *Query[T]) Distinct() *Query[T] {
 	return q
 }
 
+// Unscoped 关闭软删除自动过滤：查询结果包含已软删除的行。
+// 仅对声明了 col.SoftDelete 字段的模型生效；普通模型无影响。
+func (q *Query[T]) Unscoped() *Query[T] {
+	q.unscoped = true
+	return q
+}
+
 // ForUpdate 加 FOR UPDATE 锁子句（事务内悲观锁）。
 func (q *Query[T]) ForUpdate() *Query[T] {
 	q.lockClause = "FOR UPDATE"
@@ -183,12 +191,21 @@ func (q *Query[T]) With(name, sqlStr string, args []any, recursive bool, columns
 }
 
 // buildSelectQuery 把 Query 的字段组装成 builder.SelectQuery。
+// 若模型有软删除字段且未 Unscoped，自动追加 WHERE deleted_at IS NULL。
 func (q *Query[T]) buildSelectQuery() builder.SelectQuery {
+	where := q.where
+	if !q.unscoped {
+		if sdCol := q.table.Meta.SoftDeleteColumn(); sdCol != "" {
+			// 自动追加 deleted_at IS NULL（与用户 WHERE 用 AND 组合）
+			sdFilter := expr.LeafRaw(q.table.Meta.Table+"."+sdCol, "IS NULL")
+			where = where.And(sdFilter)
+		}
+	}
 	return builder.SelectQuery{
 		Alias:      q.alias,
 		SelectCols: q.selectCols,
 		Joins:      q.joins,
-		Where:      q.where,
+		Where:      where,
 		GroupBy:    q.groupBy,
 		Having:     q.having,
 		Orders:     q.orders,

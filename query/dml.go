@@ -597,6 +597,11 @@ func (d *Deleter[T]) Where(e expr.Expr) *Deleter[T] {
 }
 
 // Exec 执行 DELETE（触发 BeforeDelete/AfterDelete 钩子）。
+//
+// 若模型声明了 col.SoftDelete 字段，自动改写为 UPDATE SET deleted_at = now()
+// （软删除），并自动追加 WHERE deleted_at IS NULL（只删未删的行）。
+// 触发的仍是 BeforeDelete/AfterDelete 钩子（语义一致：用户调的是 Delete）。
+//
 // 注意：Delete 无具体 target 实体，钩子的 target 参数为 nil；用户可在钩子内
 // 用 ctx 自行查询受影响行。
 func (d *Deleter[T]) Exec(ctx context.Context) error {
@@ -605,16 +610,36 @@ func (d *Deleter[T]) Exec(ctx context.Context) error {
 		return fmt.Errorf("fusion: BeforeDelete hook: %w", err)
 	}
 
-	sqlStr, args := builder.BuildDELETE(d.table.Meta, builder.DeleteQuery{
-		Where: d.where,
-	}, d.d)
+	sdCol := d.table.Meta.SoftDeleteColumn()
+	where := d.where
+	var sqlStr string
+	var args []any
+	op := "DELETE"
+
+	if sdCol != "" {
+		// 软删除：UPDATE SET deleted_at = now() WHERE ... AND deleted_at IS NULL
+		sdFilter := expr.LeafRaw(d.table.Meta.Table+"."+sdCol, "IS NULL")
+		where = where.And(sdFilter)
+		now := time.Now()
+		sqlStr, args = builder.BuildUPDATE(d.table.Meta, builder.UpdateQuery{
+			SetCols: []string{sdCol},
+			Where:   where,
+		}, []any{now}, d.d)
+		op = "DELETE(soft)" // 日志标识软删除
+	} else {
+		// 硬删除：DELETE FROM ... WHERE ...
+		sqlStr, args = builder.BuildDELETE(d.table.Meta, builder.DeleteQuery{
+			Where: where,
+		}, d.d)
+	}
+
 	start := time.Now()
 	res, err := d.execer.ExecContext(ctx, sqlStr, args...)
 	var rowsAffected int64
 	if err == nil && res != nil {
 		rowsAffected, _ = res.RowsAffected()
 	}
-	logging.LogQuery(ctx, logging.QueryInfo{Op: "DELETE", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: err})
+	logging.LogQuery(ctx, logging.QueryInfo{Op: op, SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: err})
 	if err != nil {
 		return fmt.Errorf("fusion: delete: %w (sql=%s)", err, sqlStr)
 	}

@@ -28,6 +28,9 @@ type FieldMeta struct {
 	IsRelation bool
 	// IsPrimaryKey 标记是否为主键（首个非关联字段，或 db:"pk" tag 指定）。
 	IsPrimaryKey bool
+	// IsSoftDelete 标记是否为软删除字段（col.SoftDelete 类型）。
+	// 查询时自动追加 WHERE deleted_at IS NULL；Delete 改写为 UPDATE。
+	IsSoftDelete bool
 }
 
 // FieldDescriptor 由 Col[T]/Rel[T] 等字段类型实现，供 Register 反射填充元数据。
@@ -74,6 +77,17 @@ func (m *ModelMeta) PrimaryKeyColumns() []string {
 		}
 	}
 	return out
+}
+
+// SoftDeleteColumn 返回软删除列名（deleted_at），无软删除字段返回空串。
+// 供 query/builder 层判断是否自动追加 WHERE deleted_at IS NULL。
+func (m *ModelMeta) SoftDeleteColumn() string {
+	for _, f := range m.Fields {
+		if f.IsSoftDelete {
+			return f.Column
+		}
+	}
+	return ""
 }
 
 // Table 是注册后的模型表对象，泛型持有模型类型信息，供 query 层使用。
@@ -161,12 +175,17 @@ func Register[T any](name string) *Table[T] {
 		if col == "" {
 			col = snake(f.Name)
 		}
+		// 软删除字段列名固定为 deleted_at（约定，忽略字段名蛇形化）
+		if isSoftDeleteType(f.Type) {
+			col = "deleted_at"
+		}
 		fm := FieldMeta{
-			FieldName:  f.Name,
-			Column:     col,
-			Table:      name,
-			IsRelation: isRelationType(f.Type),
+			FieldName:    f.Name,
+			Column:       col,
+			Table:        name,
+			IsRelation:   isRelationType(f.Type),
 			IsPrimaryKey: isPK, // 显式标记的 PK（可多个）
+			IsSoftDelete: isSoftDeleteType(f.Type),
 		}
 		if isPK {
 			explicitPKCount++
@@ -276,6 +295,12 @@ func RangeTables(fn func(rt reflect.Type, tab TableOf) bool) {
 func isRelationType(t reflect.Type) bool {
 	s := t.String()
 	return strings.HasPrefix(s, "rel.Rel[") || strings.HasPrefix(s, "rel.RelMany[")
+}
+
+// isSoftDeleteType 判断字段类型是否为 col.SoftDelete（软删除字段）。
+// 与 isRelationType 同套路：按类型名字符串前缀判断，避免 meta 依赖 col 包。
+func isSoftDeleteType(t reflect.Type) bool {
+	return t.String() == "col.SoftDelete"
 }
 
 // FieldValuer 由 col.Col[T] 实现，供 DML 生成时反射收集字段值。
