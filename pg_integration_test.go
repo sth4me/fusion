@@ -23,6 +23,7 @@ import (
 	"github.com/sth4me/fusion/col"
 	"github.com/sth4me/fusion/dialect"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -43,10 +44,10 @@ func pgDB(t *testing.T) (*sql.DB, func()) {
 	return db, func() {
 		// 清理：drop 测试表
 		for _, t := range []string{
-			"pg_users", "pg_posts",
-			"pg_emps", "pg_comments", "pg_union_a", "pg_union_b",
-			"pg_json_items", "pg_user_roles",
-		} {
+				"pg_users", "pg_posts",
+				"pg_emps", "pg_comments", "pg_union_a", "pg_union_b",
+				"pg_json_items", "pg_user_roles", "pg_uuid_items",
+			} {
 			db.Exec("DROP TABLE IF EXISTS " + t + " CASCADE")
 		}
 		db.Close()
@@ -492,4 +493,82 @@ func containsPgDeadlock(s string) bool {
 		}
 	}
 	return false
+}
+
+// === PG 原生 uuid 类型 ===
+
+// PGUUIDItem PG uuid 列测试模型。
+type PGUUIDItem struct {
+	ID       col.Col[uuid.UUID]  // 主键 uuid
+	ParentID col.Col[uuid.UUID]  // 非空 uuid
+	RefID    col.Col[*uuid.UUID] // 可空 uuid
+}
+
+// TestPG_UUID PG 原生 uuid 类型往返。
+// 关键验证：pgx 驱动对 uuid 列返回 [16]byte（不是 string），assignReflect 必须能转。
+func TestPG_UUID(t *testing.T) {
+	db, cleanup := pgDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	db.Exec("DROP TABLE IF EXISTS pg_uuid_items")
+	if _, err := db.Exec(`CREATE TABLE pg_uuid_items (
+		id uuid PRIMARY KEY,
+		parent_id uuid NOT NULL,
+		ref_id uuid)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	fusion.SetDefaultDialect(dialect.PostgresDialect)
+	wrapped := fusion.WrapDB(db)
+	Items := fusion.Register[PGUUIDItem]("pg_uuid_items")
+
+	id := uuid.Must(uuid.NewV7())
+	parentID := uuid.Must(uuid.NewV7())
+	refID := uuid.Must(uuid.NewV7())
+
+	// 行1：RefID 有值
+	it1 := &PGUUIDItem{}
+	it1.ID.Set(id)
+	it1.ParentID.Set(parentID)
+	it1.RefID.Set(&refID)
+	if err := fusion.Insert(Items, wrapped, it1).Exec(ctx); err != nil {
+		t.Fatalf("insert row1: %v", err)
+	}
+	// 行2：RefID NULL
+	it2 := &PGUUIDItem{}
+	it2.ID.Set(uuid.Must(uuid.NewV7()))
+	it2.ParentID.Set(parentID)
+	if err := fusion.Insert(Items, wrapped, it2).Exec(ctx); err != nil {
+		t.Fatalf("insert row2: %v", err)
+	}
+
+	got, err := fusion.From(Items, wrapped).OrderBy(Items.Proto.ID.Asc()).All(ctx)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want 2", len(got))
+	}
+	// 行1 往返
+	if got[0].ID.Get() != id {
+		t.Errorf("row1 ID got %v, want %v", got[0].ID.Get(), id)
+	}
+	if got[0].ParentID.Get() != parentID {
+		t.Errorf("row1 ParentID got %v, want %v", got[0].ParentID.Get(), parentID)
+	}
+	if got[0].RefID.Get() == nil || *got[0].RefID.Get() != refID {
+		t.Errorf("row1 RefID got %v, want %v", got[0].RefID.Get(), refID)
+	}
+	// 行2 NULL
+	if got[1].RefID.Get() != nil {
+		t.Errorf("row2 RefID got %v, want nil", got[1].RefID.Get())
+	}
+
+	// 按 uuid 查询（$N 占位符 + uuid 参数）
+	one, err := fusion.From(Items, wrapped).Where(Items.Proto.ID.Eq(id)).One(ctx)
+	if err != nil {
+		t.Fatalf("query by uuid: %v", err)
+	}
+	if one.ID.Get() != id {
+		t.Errorf("query by uuid got %v, want %v", one.ID.Get(), id)
+	}
 }
