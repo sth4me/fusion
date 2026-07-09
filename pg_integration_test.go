@@ -46,7 +46,7 @@ func pgDB(t *testing.T) (*sql.DB, func()) {
 		for _, t := range []string{
 				"pg_users", "pg_posts",
 				"pg_emps", "pg_comments", "pg_union_a", "pg_union_b",
-				"pg_json_items", "pg_user_roles", "pg_uuid_items",
+				"pg_json_items", "pg_user_roles", "pg_uuid_items", "pg_numeric_items",
 			} {
 			db.Exec("DROP TABLE IF EXISTS " + t + " CASCADE")
 		}
@@ -570,5 +570,52 @@ func TestPG_UUID(t *testing.T) {
 	}
 	if one.ID.Get() != id {
 		t.Errorf("query by uuid got %v, want %v", one.ID.Get(), id)
+	}
+}
+
+// === PG numeric 列（驱动默认返回 string，验证 parseNumeric fallback）===
+
+// PGNumericItem 测试 numeric 列读入 float64。
+type PGNumericItem struct {
+	ID    col.Col[int64]
+	Price col.Col[float64] // PG numeric(19,4) → 驱动返回 string → parseNumeric 解析
+	Qty   col.Col[int64]   // numeric 也可能返回 string
+}
+
+// TestPG_Numeric PG numeric(19,4) 列读入 Col[float64] / Col[int64]。
+// pgx 对 numeric 列默认返回 string，验证 parseNumeric 的 string→float64/int64 fallback。
+func TestPG_Numeric(t *testing.T) {
+	db, cleanup := pgDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	db.Exec("DROP TABLE IF EXISTS pg_numeric_items")
+	if _, err := db.Exec(`CREATE TABLE pg_numeric_items (
+		id SERIAL PRIMARY KEY,
+		price numeric(19,4) NOT NULL,
+		qty numeric(10,0) NOT NULL)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	fusion.SetDefaultDialect(dialect.PostgresDialect)
+	wrapped := fusion.WrapDB(db)
+	Items := fusion.Register[PGNumericItem]("pg_numeric_items")
+
+	// 写入（fusion 把 float64 当参数传，PG 存为 numeric）
+	it := &PGNumericItem{}
+	it.Price.Set(100.50)
+	it.Qty.Set(42)
+	if err := fusion.Insert(Items, wrapped, it).Exec(ctx); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// 读回：pgx 返回 string "100.5000"，parseNumeric 解析为 float64
+	got, err := fusion.From(Items, wrapped).Where(Items.Proto.ID.Eq(it.ID.Get())).One(ctx)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if got.Price.Get() != 100.5 {
+		t.Errorf("price got %v, want 100.5 (numeric→string→float64)", got.Price.Get())
+	}
+	if got.Qty.Get() != 42 {
+		t.Errorf("qty got %v, want 42 (numeric→string→int64)", got.Qty.Get())
 	}
 }

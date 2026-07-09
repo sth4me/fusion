@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"strconv"
 	"time"
 )
 
@@ -51,7 +52,53 @@ func assignReflect(rv reflect.Value, src any) error {
 		rv.Set(srcVal.Convert(rv.Type()))
 		return nil
 	}
+	// fallback：string / []byte → 数值类型（PG numeric/money 等列驱动默认返回 string）。
+	// 解析失败时不静默置零，落到下面的 return error（与 assignTime 失败语义一致）。
+	if s, ok := srcString(src); ok {
+		if v, ok := parseNumeric(s, rv); ok {
+			rv.Set(v)
+			return nil
+		}
+	}
 	return fmt.Errorf("fusion: cannot scan %T into %s", src, rv.Type())
+}
+
+// srcString 把 string / []byte 源值统一成 string；其它类型返回 false。
+func srcString(src any) (string, bool) {
+	switch x := src.(type) {
+	case string:
+		return x, true
+	case []byte:
+		return string(x), true
+	}
+	return "", false
+}
+
+// parseNumeric 按 rv.Kind() 用 strconv 解析数值字符串。
+// 整数目标遇到带小数的字符串会失败（ParseInt 不接受小数点）——这是有意的，不截断。
+// 非数值 Kind 返回 false（交回原错误路径）。
+func parseNumeric(s string, rv reflect.Value) (reflect.Value, bool) {
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := strconv.ParseInt(s, 10, rv.Type().Bits())
+		if err != nil {
+			return reflect.Value{}, false
+		}
+		return reflect.ValueOf(n).Convert(rv.Type()), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n, err := strconv.ParseUint(s, 10, rv.Type().Bits())
+		if err != nil {
+			return reflect.Value{}, false
+		}
+		return reflect.ValueOf(n).Convert(rv.Type()), true
+	case reflect.Float32, reflect.Float64:
+		n, err := strconv.ParseFloat(s, rv.Type().Bits())
+		if err != nil {
+			return reflect.Value{}, false
+		}
+		return reflect.ValueOf(n).Convert(rv.Type()), true
+	}
+	return reflect.Value{}, false
 }
 
 // scanBoolFromIntish 把整数类源值（int64/int/[]byte数字/string数字）转 bool。
