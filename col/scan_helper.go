@@ -2,6 +2,7 @@ package col
 
 import (
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -60,6 +61,15 @@ func assignReflect(rv reflect.Value, src any) error {
 			return nil
 		}
 	}
+	// fallback：[]byte / string（jsonb 原始 JSON）→ map/slice/struct/json.Unmarshaler。
+	// PG jsonb 经 pgx 返回 []byte，目标若是结构化类型则 json.Unmarshal。
+	// 仅对 map/slice/struct/json.Unmarshaler 目标尝试，避免与 numeric/bool/time 冲突。
+	// 解析失败不吞错误，落到 return error。
+	if data, ok := toBytes(src); ok {
+		if ok := unmarshalJSON(data, rv); ok {
+			return nil
+		}
+	}
 	return fmt.Errorf("fusion: cannot scan %T into %s", src, rv.Type())
 }
 
@@ -101,7 +111,52 @@ func parseNumeric(s string, rv reflect.Value) (reflect.Value, bool) {
 	return reflect.Value{}, false
 }
 
-// scanBoolFromIntish 把整数类源值（int64/int/[]byte数字/string数字）转 bool。
+// toBytes 把 []byte / string 源值统一为 []byte；其它类型返回 false。
+func toBytes(src any) ([]byte, bool) {
+	switch x := src.(type) {
+	case []byte:
+		return x, true
+	case string:
+		return []byte(x), true
+	}
+	return nil, false
+}
+
+// unmarshalJSON 尝试把 JSON 字节解析进 rv（可寻址）。
+// 仅当目标 Kind 是 map/slice/struct，或目标实现了 json.Unmarshaler 时才尝试。
+// 数值/bool/string/time 等目标不处理（交回原错误路径，避免与 numeric/bool 冲突）。
+// 成功返回 true；失败或不适用返回 false（不报错，让上层走 return error）。
+func unmarshalJSON(data []byte, rv reflect.Value) bool {
+	// 空数据不处理（空 []byte 不是合法 JSON，交回原路径报错更清晰）
+	if len(data) == 0 {
+		return false
+	}
+	// 优先：目标实现了 json.Unmarshaler（自定义类型的自定义反序列化逻辑）
+	if rv.CanAddr() {
+		if u, ok := rv.Addr().Interface().(json.Unmarshaler); ok {
+			if err := u.UnmarshalJSON(data); err != nil {
+				return false // 解析失败交回原路径报错
+			}
+			return true
+		}
+	}
+	// 仅对 map/slice/struct 目标尝试 json.Unmarshal
+	switch rv.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Struct:
+		// map/slice 需要 Init（零值 map/slice 无法直接 Unmarshal）
+		if rv.Kind() == reflect.Map && rv.IsNil() {
+			rv.Set(reflect.MakeMap(rv.Type()))
+		}
+		if rv.Kind() == reflect.Slice && rv.IsNil() {
+			rv.Set(reflect.MakeSlice(rv.Type(), 0, 0))
+		}
+		if err := json.Unmarshal(data, rv.Addr().Interface()); err != nil {
+			return false
+		}
+		return true
+	}
+	return false
+}
 // 非 0 → true；0 → false。非整数类返回 (false, false)。
 func scanBoolFromIntish(src any) (bool, bool) {
 	switch x := src.(type) {

@@ -47,6 +47,7 @@ func pgDB(t *testing.T) (*sql.DB, func()) {
 				"pg_users", "pg_posts",
 				"pg_emps", "pg_comments", "pg_union_a", "pg_union_b",
 				"pg_json_items", "pg_user_roles", "pg_uuid_items", "pg_numeric_items",
+				"pg_jsonb_raw",
 			} {
 			db.Exec("DROP TABLE IF EXISTS " + t + " CASCADE")
 		}
@@ -617,5 +618,56 @@ func TestPG_Numeric(t *testing.T) {
 	}
 	if got.Qty.Get() != 42 {
 		t.Errorf("qty got %v, want 42 (numeric→string→int64)", got.Qty.Get())
+	}
+}
+
+// === PG jsonb 列（Col[map/slice] 直接读写，无需 col.Json 包装）===
+
+// PGJSONbRaw 用 Col[map[string]any] 直接读写 jsonb（验证 marshal 写 + unmarshal 读双向）。
+type PGJSONbRaw struct {
+	ID      col.Col[int64]
+	Specs   col.Col[map[string]any] // jsonb → pgx 返回 []byte → unmarshalJSON 解析
+	Tags    col.Col[[]string]       // jsonb 数组
+}
+
+// TestPG_JSONbRaw PG jsonb 列用 Col[map]/Col[slice] 直接双向读写。
+// 写入：driverVal 把 map/slice marshal 成 JSON 字节 → PG 存入 jsonb。
+// 读取：pgx 返回 []byte → unmarshalJSON 解析回 map/slice。
+func TestPG_JSONbRaw(t *testing.T) {
+	db, cleanup := pgDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	db.Exec("DROP TABLE IF EXISTS pg_jsonb_raw")
+	if _, err := db.Exec(`CREATE TABLE pg_jsonb_raw (
+		id SERIAL PRIMARY KEY,
+		specs jsonb NOT NULL,
+		tags jsonb NOT NULL)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	fusion.SetDefaultDialect(dialect.PostgresDialect)
+	wrapped := fusion.WrapDB(db)
+	Items := fusion.Register[PGJSONbRaw]("pg_jsonb_raw")
+
+	// 写入（driverVal marshal map/slice → JSON → pgx 存入 jsonb）
+	it := &PGJSONbRaw{}
+	it.Specs.Set(map[string]any{"color": "red", "size": float64(42)})
+	it.Tags.Set([]string{"new", "hot"})
+	if err := fusion.Insert(Items, wrapped, it).Exec(ctx); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// 读回（pgx jsonb → []byte → unmarshalJSON → map/slice）
+	got, err := fusion.From(Items, wrapped).Where(Items.Proto.ID.Eq(it.ID.Get())).One(ctx)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if got.Specs.Get()["color"] != "red" {
+		t.Errorf("specs.color got %v, want red", got.Specs.Get()["color"])
+	}
+	if got.Specs.Get()["size"] != float64(42) {
+		t.Errorf("specs.size got %v, want 42", got.Specs.Get()["size"])
+	}
+	if len(got.Tags.Get()) != 2 || got.Tags.Get()[0] != "new" || got.Tags.Get()[1] != "hot" {
+		t.Errorf("tags got %v, want [new hot]", got.Tags.Get())
 	}
 }

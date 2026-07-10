@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"reflect"
+	"time"
 )
 
 // maybeDeref 若 v 是指针则解引用返回底层值；nil 指针返回 nil（表示 SQL NULL）。
@@ -52,7 +53,42 @@ func driverVal(v any) driver.Value {
 	case uint32:
 		return int64(x)
 	}
+	// fallback：map/slice/struct → JSON 字节（写入 PG jsonb 等 JSON 列）。
+	// 与 scan_helper.go 的 unmarshalJSON 对称——读用 json.Unmarshal，写用 json.Marshal。
+	// 让 Col[map[string]any]/Col[[]int]/Col[struct] 无需 col.Json 包装即可双向 JSON。
+	if isJSONKind(v) {
+		b, err := json.Marshal(v)
+		if err != nil {
+			// Marshal 失败返回 nil（driver 会当 NULL；极少见，如循环引用）
+			return nil
+		}
+		return b
+	}
 	return v
+}
+
+// isJSONKind 报告 v 是否为适合 JSON 序列化的 Go 类型（map/slice/struct）。
+// 排除 time.Time（已有 Valuer 处理）和已实现 driver.Valuer 的类型（上面已处理）。
+func isJSONKind(v any) bool {
+	if v == nil {
+		return false
+	}
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return false
+		}
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Struct:
+		// time.Time 是 struct 但已有专门的 Valuer，排除
+		if rv.Type() == reflect.TypeOf(time.Time{}) {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 // Scan 实现 sql.Scanner，供 database/sql 把查询结果扫描进 Col。
