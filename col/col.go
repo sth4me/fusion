@@ -10,6 +10,7 @@ package col
 
 import (
 	"database/sql/driver"
+	"reflect"
 
 	"github.com/sth4me/fusion/expr"
 	"github.com/sth4me/fusion/meta"
@@ -200,19 +201,35 @@ func (g GroupCol) RenderClause(d expr.Renderer) string { return d.QuoteCol(g.ref
 
 // --- 透明序列化（见决策1：JSON/SQL 全自动透明） ---
 
-// Valuer 用于把 Col[T] 内的值（可能是指针）转换为 SQL 可接受的值。
+// derefAny 把 Col[T] 内的值（可能是指针）转换为 SQL 可接受的值。
+//
+// 三个分支（顺序关键）：
+//  1. nil 接口 → nil（NULL）
+//  2. typed-nil 指针（接口非 nil，底层指针 nil）→ nil（NULL）。
+//     必须在 driver.Valuer 分支之前判定：*uuid.UUID 等类型实现了 Valuer
+//     （值接收者方法），当接口持有 (*uuid.UUID)(nil) 时直接 x.Value() 会在
+//     nil 接收者上调值方法 → panic。Set(nil) 清空可空指针列会走此分支。
+//  3. driver.Valuer（非 nil）→ 调 Value()
+//  4. 其他指针 → 反射解引用
 func derefAny(v any) any {
-	// 若 T 是指针，driver 需要解引用；nil 指针 → nil（NULL）。
-	switch x := v.(type) {
-	case nil:
+	if v == nil {
 		return nil
-	case driver.Valuer:
+	}
+	// typed-nil 指针 → NULL（避免对 nil 指针调 Value() panic）
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return nil
+		}
+		rv = rv.Elem()
+	}
+	// 解引用后的非指针值再走 Valuer / 原值
+	if x, ok := rv.Interface().(driver.Valuer); ok {
 		val, err := x.Value()
 		if err == nil {
 			return val
 		}
 		return nil
 	}
-	// 通过反射解指针（T 可能是 *string 等）
-	return maybeDeref(v)
+	return rv.Interface()
 }

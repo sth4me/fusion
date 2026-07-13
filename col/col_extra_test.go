@@ -1,6 +1,7 @@
 package col
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -266,4 +267,66 @@ func containsStr(s, substr string) bool {
 		}
 		return false
 	})()
+}
+
+// --- derefAny typed-nil 指针回归测试 ---
+// 背景：*uuid.UUID / *time.Time 等实现了 driver.Valuer（值接收者方法）。
+// 当接口持有 typed-nil（如 Set(nil) 存的 (*uuid.UUID)(nil)）时，
+// 旧版 derefAny 走 driver.Valuer 分支在 nil 接收者上调 Value() → panic。
+// 修复后 typed-nil 指针应返回 nil（=SQL NULL），不 panic。
+
+// fakeValuer 模拟 *uuid.UUID：值接收者实现的 driver.Valuer。
+type fakeValuer struct{ raw string }
+
+func (v fakeValuer) Value() (driver.Value, error) { return v.raw, nil }
+
+// nilPtrValuer 模拟 *uuid.UUID 的 typed-nil：方法集里有 Value（值接收者），
+// 但指针本身为 nil（通过 *fakeValuer 在 nil 时调 Value 会 panic）。
+func TestDerefAny_TypedNilPointer_DriverValuer(t *testing.T) {
+	// typed-nil *fakeValuer：接口非 nil，底层指针 nil。
+	// 旧版：走 driver.Valuer → (*fakeValuer)(nil).Value() panic。
+	// 修复后：返回 nil（SQL NULL）。
+	var p *fakeValuer // nil
+	got := derefAny(p)
+	if got != nil {
+		t.Errorf("typed-nil *fakeValuer 应返回 nil（SQL NULL），实际 %v", got)
+	}
+}
+
+func TestDerefAny_NilInterface(t *testing.T) {
+	if got := derefAny(nil); got != nil {
+		t.Errorf("nil 接口应返回 nil，实际 %v", got)
+	}
+}
+
+func TestDerefAny_NonNilValuer(t *testing.T) {
+	v := fakeValuer{raw: "abc"}
+	got := derefAny(v)
+	if got != "abc" {
+		t.Errorf("非 nil Valuer 应返回 Value() 结果 abc，实际 %v", got)
+	}
+}
+
+func TestDerefAny_NilPointerToPlainType(t *testing.T) {
+	// *string（不实现 Valuer）的 typed-nil → nil（走反射解引用分支）
+	var s *string
+	got := derefAny(s)
+	if got != nil {
+		t.Errorf("typed-nil *string 应返回 nil，实际 %v", got)
+	}
+}
+
+func TestDerefAny_NonNilPointerToPlainType(t *testing.T) {
+	s := "hello"
+	got := derefAny(&s)
+	if got != "hello" {
+		t.Errorf("非 nil *string 应解引用为 hello，实际 %v", got)
+	}
+}
+
+func TestDerefAny_PlainValue(t *testing.T) {
+	got := derefAny(42)
+	if got != 42 {
+		t.Errorf("普通值 42 应原样返回，实际 %v", got)
+	}
 }
