@@ -154,22 +154,18 @@ func TestUpsert(t *testing.T) {
 	}
 }
 
-// TestErrNotFound 哨兵错误 ErrNotFound
-func TestErrNotFound(t *testing.T) {
+// TestOneNotFound 验证 One 查无结果返回 sql.ErrNoRows（fusion 不另造 sentinel）。
+func TestOneNotFound(t *testing.T) {
 	wrapped, raw := setupFeaturesDB(t)
 	defer raw.Close()
 	Users := fusion.Register[FUser]("fusers")
 
 	_, err := fusion.From(Users, wrapped).Where(Users.Proto.ID.Eq(99999)).One(context.Background())
 	if err == nil {
-		t.Fatal("should error for not found")
+		t.Fatal("查无结果应返回 error")
 	}
-	// errors.Is(err, fusion.ErrNotFound) 应为 true
-	if !errors.Is(err, fusion.ErrNotFound) {
-		t.Errorf("should be ErrNotFound, got %v", err)
-	}
-	// 同时兼容 sql.ErrNoRows
+	// fusion 直接返回标准库 sql.ErrNoRows，不另造 sentinel
 	if !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("should also be sql.ErrNoRows, got %v", err)
+		t.Errorf("应为 sql.ErrNoRows，got %v", err)
 	}
 }

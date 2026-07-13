@@ -214,7 +214,7 @@ func LogQuery(ctx context.Context, info QueryInfo) {
 		// sql.ErrNoRows / fusion.ErrNotFound 是业务正常路径（查无结果），降级 Debug。
 		lg.Error("query failed", append(attrs, slog.Any("err", info.Err))...)
 	case info.Err != nil:
-		// 查询无结果：业务正常路径，Debug 级（默认不输出，调试时可开 Debug level）。
+		// 查询无结果（sql.ErrNoRows）：业务正常路径，Debug 级。
 		lg.Debug("query no rows", attrs...)
 	case info.Duration >= slowThreshold:
 		lg.Warn("slow query", attrs...)
@@ -255,9 +255,8 @@ func (discardHandler) Handle(context.Context, slog.Record) error     { return ni
 func (h discardHandler) WithAttrs([]slog.Attr) slog.Handler          { return h }
 func (h discardHandler) WithGroup(string) slog.Handler               { return h }
 
-// isNoRowsErr 报告 err 是否为"查询无结果"类（sql.ErrNoRows，含 fusion.ErrNotFound 包装）。
-// 这类是业务正常路径（One 无匹配），不应记 ERROR。用 sql.ErrNoRows 判即可——
-// fusion 的 ErrNotFound 用 %w 双重包装了 sql.ErrNoRows，errors.Is 兼容。
+// isNoRowsErr 报告 err 是否为 sql.ErrNoRows（查询无结果）。
+// 这是业务正常路径，不应记 ERROR。
 func isNoRowsErr(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }
