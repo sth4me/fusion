@@ -12,6 +12,8 @@ package logging
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
@@ -207,8 +209,13 @@ func LogQuery(ctx context.Context, info QueryInfo) {
 		slowThreshold = sc
 	}
 	switch {
-	case info.Err != nil:
+	case info.Err != nil && !isNoRowsErr(info.Err):
+		// 真错误（连接/语法/约束冲突等）才记 ERROR。
+		// sql.ErrNoRows / fusion.ErrNotFound 是业务正常路径（查无结果），降级 Debug。
 		lg.Error("query failed", append(attrs, slog.Any("err", info.Err))...)
+	case info.Err != nil:
+		// 查询无结果：业务正常路径，Debug 级（默认不输出，调试时可开 Debug level）。
+		lg.Debug("query no rows", attrs...)
 	case info.Duration >= slowThreshold:
 		lg.Warn("slow query", attrs...)
 	default:
@@ -247,6 +254,13 @@ func (discardHandler) Enabled(context.Context, slog.Level) bool      { return fa
 func (discardHandler) Handle(context.Context, slog.Record) error     { return nil }
 func (h discardHandler) WithAttrs([]slog.Attr) slog.Handler          { return h }
 func (h discardHandler) WithGroup(string) slog.Handler               { return h }
+
+// isNoRowsErr 报告 err 是否为"查询无结果"类（sql.ErrNoRows，含 fusion.ErrNotFound 包装）。
+// 这类是业务正常路径（One 无匹配），不应记 ERROR。用 sql.ErrNoRows 判即可——
+// fusion 的 ErrNotFound 用 %w 双重包装了 sql.ErrNoRows，errors.Is 兼容。
+func isNoRowsErr(err error) bool {
+	return errors.Is(err, sql.ErrNoRows)
+}
 
 // mapPlaceholdersToColumns 扫描 SQL，返回每个占位符（按出现顺序）对应的列名。
 // 无法定位的占位符对应空串（不脱敏）。
