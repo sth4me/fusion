@@ -49,7 +49,7 @@ func TestRenderSQL_Placeholders(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := renderSQL(c.sql, c.args)
+			got := RenderSQL(c.sql, c.args)
 			if got != c.want {
 				t.Errorf("renderSQL:\n got: %s\nwant: %s", got, c.want)
 			}
@@ -60,7 +60,7 @@ func TestRenderSQL_Placeholders(t *testing.T) {
 // TestRenderSQL_StringLiteralNotReplaced 验证字符串字面量内的 ? 不被误替换。
 func TestRenderSQL_StringLiteralNotReplaced(t *testing.T) {
 	sql := "SELECT * FROM u WHERE note = 'is this?' AND id = ?"
-	got := renderSQL(sql, []any{int64(7)})
+	got := RenderSQL(sql, []any{int64(7)})
 	want := "SELECT * FROM u WHERE note = 'is this?' AND id = 7"
 	if got != want {
 		t.Errorf("string literal protection failed:\n got: %s\nwant: %s", got, want)
@@ -98,7 +98,7 @@ func TestSqlLiteral_Types(t *testing.T) {
 
 // TestRenderSQL_TooFewArgs 验证 args 少于占位符时占位符原样保留（容错不 panic）。
 func TestRenderSQL_TooFewArgs(t *testing.T) {
-	got := renderSQL("WHERE id = ? AND age = ?", []any{int64(1)})
+	got := RenderSQL("WHERE id = ? AND age = ?", []any{int64(1)})
 	want := "WHERE id = 1 AND age = ?"
 	if got != want {
 		t.Errorf("too few args:\n got: %s\nwant: %s", got, want)
@@ -197,7 +197,7 @@ func TestLogQuery_RenderAfterRedaction(t *testing.T) {
 // TestRenderSQL_MixedDollarMultipleDigits 验证 $10 这种多位占位符。
 func TestRenderSQL_MixedDollarMultipleDigits(t *testing.T) {
 	sql := "INSERT INTO t VALUES ($1, $2, $10)"
-	got := renderSQL(sql, []any{int64(1), int64(2), int64(10)})
+	got := RenderSQL(sql, []any{int64(1), int64(2), int64(10)})
 	want := "INSERT INTO t VALUES (1, 2, 10)"
 	if got != want {
 		t.Errorf("multi-digit placeholder:\n got: %s\nwant: %s", got, want)

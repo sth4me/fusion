@@ -16,6 +16,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -230,7 +231,7 @@ func LogQuery(ctx context.Context, info QueryInfo) {
 		enabled = r
 	}
 	if enabled {
-		sqlOut = renderSQL(info.SQL, logArgs)
+		sqlOut = RenderSQL(info.SQL, logArgs)
 	}
 	attrs := []any{
 		slog.String("op", info.Op),
@@ -310,6 +311,149 @@ func (discardHandler) Enabled(context.Context, slog.Level) bool      { return fa
 func (discardHandler) Handle(context.Context, slog.Record) error     { return nil }
 func (h discardHandler) WithAttrs([]slog.Attr) slog.Handler          { return h }
 func (h discardHandler) WithGroup(string) slog.Handler               { return h }
+
+// NewDebugSQLHandler 创建面向调试的 slog.Handler：把每条查询日志渲染成
+// 一行可直接复制粘贴到 SQL 工具执行的纯文本 SQL，不经过 slog 的引号转义。
+//
+// 与默认 TextHandler/JSONHandler 的区别：后者对含双引号/空格的 SQL 值强制转义
+//（" → \"、整体加引号包裹），复制后无法直接粘进 psql/DBeaver；本 handler 直接写
+// SQL 原文，PG 的双引号标识符（"user_id"）原样保留。
+//
+// 它自带 SQL 组装渲染（不依赖 SetRenderSQL 全局开关）：从查询日志携带的 sql 模板
+// + args 现场用 RenderSQL 组装，输出完整 SQL。敏感列的值已由 LogQuery 在到达
+// handler 前脱敏（args 中对应位置为 "***"），渲染后仍是 *** 不泄露明文。
+//
+// 用法（调试时临时替换全局 logger；生产保持默认结构化 handler 不变）：
+//
+//	fusion.SetLogger(slog.New(logging.NewDebugSQLHandler(os.Stderr, slog.LevelDebug)))
+//
+// 输出形如：
+//
+//	2026-07-16T10:00:00.123Z DEBUG SELECT SELECT "user_id", "role_id" FROM "user_roles" WHERE "user_id" = '019f63e0-...'  (2.1ms, 1 rows)
+//
+// 错误时追加 err=...；慢查询级别为 WARN；查询无结果（ErrNoRows）为 DEBUG 且行数 0。
+func NewDebugSQLHandler(w io.Writer, level slog.Leveler) slog.Handler {
+	return &debugSQLHandler{w: w, level: level}
+}
+
+// debugSQLHandler 实现 slog.Handler，输出零转义的可粘贴 SQL 单行。
+type debugSQLHandler struct {
+	w     io.Writer
+	level slog.Leveler
+	attrs []slog.Attr // WithAttrs 预绑定属性
+}
+
+func (h *debugSQLHandler) Enabled(_ context.Context, lvl slog.Level) bool {
+	min := slog.LevelInfo
+	if h.level != nil {
+		min = h.level.Level()
+	}
+	return lvl >= min
+}
+
+func (h *debugSQLHandler) Handle(_ context.Context, r slog.Record) error {
+	// 收集本条记录的所有属性（预绑定 + record 内）
+	type kv struct {
+		k string
+		v any
+	}
+	all := make([]kv, 0, len(h.attrs)+r.NumAttrs())
+	for _, a := range h.attrs {
+		all = append(all, kv{a.Key, a.Value.Any()})
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		all = append(all, kv{a.Key, a.Value.Any()})
+		return true
+	})
+
+	var sqlStr, op, errMsg string
+	var args []any
+	var duration time.Duration
+	var rows int64
+	rowsSet := false
+	hasErr := false
+	for _, p := range all {
+		switch p.k {
+		case "sql":
+			if s, ok := p.v.(string); ok {
+				sqlStr = s
+			}
+		case "args":
+			if a, ok := p.v.([]any); ok {
+				args = a
+			}
+		case "op":
+			if s, ok := p.v.(string); ok {
+				op = s
+			}
+		case "duration":
+			if d, ok := p.v.(time.Duration); ok {
+				duration = d
+			}
+		case "rows":
+			if n, ok := p.v.(int64); ok {
+				rows = n
+				rowsSet = true
+			}
+		case "err":
+			if p.v != nil {
+				errMsg = fmt.Sprintf("%v", p.v)
+				hasErr = true
+			}
+		}
+	}
+
+	// 现场组装渲染（handler 自带渲染，不依赖全局开关）
+	finalSQL := sqlStr
+	if sqlStr != "" && args != nil {
+		finalSQL = RenderSQL(sqlStr, args)
+	}
+
+	var b strings.Builder
+	b.WriteString(r.Time.Format("2006-01-02T15:04:05.000Z07:00"))
+	b.WriteByte(' ')
+	b.WriteString(r.Level.String())
+	if op != "" {
+		b.WriteByte(' ')
+		b.WriteString(op)
+	}
+	b.WriteByte(' ')
+	b.WriteString(finalSQL)
+	// 括注：耗时 + 行数
+	b.WriteString("  (")
+	b.WriteString(formatDuration(duration))
+	if rowsSet {
+		b.WriteString(", ")
+		b.WriteString(strconv.FormatInt(rows, 10))
+		b.WriteString(" rows")
+	}
+	b.WriteByte(')')
+	if hasErr {
+		b.WriteString(" err=")
+		b.WriteString(errMsg)
+	}
+	b.WriteByte('\n')
+
+	_, err := h.w.Write([]byte(b.String()))
+	return err
+}
+
+func (h *debugSQLHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newAttrs := make([]slog.Attr, 0, len(h.attrs)+len(attrs))
+	newAttrs = append(newAttrs, h.attrs...)
+	newAttrs = append(newAttrs, attrs...)
+	return &debugSQLHandler{w: h.w, level: h.level, attrs: newAttrs}
+}
+
+func (h *debugSQLHandler) WithGroup(string) slog.Handler { return h }
+
+// formatDuration 把耗时渲染为人类可读形式（<1ms 显示 µs，否则 ms 保留 1 位小数）。
+func formatDuration(d time.Duration) string {
+	if d < time.Millisecond {
+		return d.String()
+	}
+	return strconv.FormatFloat(float64(d.Microseconds())/1000.0, 'f', 1, 64) + "ms"
+}
 
 // isNoRowsErr 报告 err 是否为 sql.ErrNoRows（查询无结果）。
 // 这是业务正常路径，不应记 ERROR。
@@ -531,14 +675,17 @@ func mapInsertPlaceholders(sqlStr string, cols []string) []string {
 	return out
 }
 
-// renderSQL 把占位符 SQL 模板（含 ? 或 $N）按顺序替换为 args 的 SQL 字面量，
-// 输出可直接阅读的完整 SQL（仅供日志展示，不送驱动）。
+// RenderSQL 把占位符 SQL 模板（含 ? 或 $N）按顺序替换为 args 的 SQL 字面量，
+// 输出可直接阅读的完整 SQL（仅供日志/调试展示，不送驱动执行）。
 //
 //   - 占位符按出现顺序消费 args：? 和 $N（N 升序）统一按序号映射。
 //     实际 builder 输出的 $N 总是升序且连续，故按出现顺序处理与 PG 语义一致。
 //   - 用 expr.SkipNonCode 跳过字符串字面量/注释，避免误替换字面量内的 ? 或 $N。
 //   - args 多于占位符时多余参数忽略；少于时占位符原样保留（容错，不 panic）。
-func renderSQL(sqlStr string, args []any) string {
+//
+// 导出供 DebugSQLHandler 等自定义输出使用：QueryHook 或 handler 可拿 info.SQL + info.Args
+// 自行渲染。注意：渲染前若需脱敏，调用方应先对 args 跑 redactArgs（LogQuery 已内置）。
+func RenderSQL(sqlStr string, args []any) string {
 	if len(args) == 0 {
 		return sqlStr
 	}

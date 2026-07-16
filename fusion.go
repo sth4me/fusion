@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -289,6 +290,17 @@ func SetRenderSQL(enabled bool) { logging.SetRenderSQL(enabled) }
 // 用于局部开启，如某段代码调试：ctx = fusion.WithRenderSQL(ctx, true)。
 func WithRenderSQL(ctx context.Context, enabled bool) context.Context {
 	return logging.WithRenderSQL(ctx, enabled)
+}
+
+// NewDebugSQLHandler 创建面向调试的 slog.Handler，把每条查询日志渲染成
+// 一行可直接复制粘贴到 SQL 工具执行的纯文本 SQL（不经过 slog 的引号转义，
+// PG 双引号标识符 "user_id" 原样保留）。自带 SQL 组装，不依赖 SetRenderSQL。
+//
+// 调试用法（临时替换全局 logger；生产保持默认结构化 handler 不变）：
+//
+//	fusion.SetLogger(slog.New(fusion.NewDebugSQLHandler(os.Stderr, slog.LevelDebug)))
+func NewDebugSQLHandler(w io.Writer, level slog.Leveler) slog.Handler {
+	return logging.NewDebugSQLHandler(w, level)
 }
 
 // AddSensitiveColumn 追加需脱敏的列名（大小写不敏感）。
