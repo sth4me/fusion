@@ -278,6 +278,19 @@ func AddQueryHook(h QueryHook) (unregister func()) { return logging.AddQueryHook
 // SetSlowThreshold 设置慢查询阈值（默认 200ms）。超过则 Warn 级记录。
 func SetSlowThreshold(d time.Duration) { logging.SetSlowThreshold(d) }
 
+// SetRenderSQL 开启/关闭日志的 SQL 组装渲染（默认关）。
+// 开启后，日志的 sql 字段会把占位符（? 或 $N）按顺序替换为参数字面量，
+// 输出可直接阅读的完整 SQL，免去人眼对位 args 的麻烦。
+// 传给驱动的 SQL 不受影响（仍走参数化执行）；敏感列的值在渲染前已脱敏。
+// 用法：调试时 fusion.SetRenderSQL(true)，生产环境保持关闭。
+func SetRenderSQL(enabled bool) { logging.SetRenderSQL(enabled) }
+
+// WithRenderSQL 把 SQL 组装渲染开关挂到 ctx，返回新 ctx（覆盖全局 SetRenderSQL）。
+// 用于局部开启，如某段代码调试：ctx = fusion.WithRenderSQL(ctx, true)。
+func WithRenderSQL(ctx context.Context, enabled bool) context.Context {
+	return logging.WithRenderSQL(ctx, enabled)
+}
+
 // AddSensitiveColumn 追加需脱敏的列名（大小写不敏感）。
 // 日志中匹配列名对应的参数值会被替换为 "***"（避免 password/token 等进日志）。
 // 默认已含 password/passwd/secret/token/api_key/access_token/refresh_token/private_key/credential。
