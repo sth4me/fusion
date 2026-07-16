@@ -1,9 +1,6 @@
 package logging
 
 import (
-	"context"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 )
@@ -51,7 +48,7 @@ func TestRenderSQL_Placeholders(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got := RenderSQL(c.sql, c.args)
 			if got != c.want {
-				t.Errorf("renderSQL:\n got: %s\nwant: %s", got, c.want)
+				t.Errorf("RenderSQL:\n got: %s\nwant: %s", got, c.want)
 			}
 		})
 	}
@@ -102,95 +99,6 @@ func TestRenderSQL_TooFewArgs(t *testing.T) {
 	want := "WHERE id = 1 AND age = ?"
 	if got != want {
 		t.Errorf("too few args:\n got: %s\nwant: %s", got, want)
-	}
-}
-
-// TestLogQuery_RenderDisabledByDefault 验证默认关闭时 sql 字段为原始模板。
-func TestLogQuery_RenderDisabledByDefault(t *testing.T) {
-	orig := IsRenderSQLEnabled()
-	SetRenderSQL(false)
-	defer SetRenderSQL(orig)
-
-	buf, restore := captureLogger(slog.LevelDebug) // 全级别
-	defer restore()
-	LogQuery(context.Background(), QueryInfo{
-		Op:       "SELECT",
-		SQL:      "SELECT * FROM u WHERE id = ?",
-		Args:     []any{int64(1)},
-		Duration: 1 * time.Millisecond,
-	})
-	out := buf.String()
-	if !strings.Contains(out, "sql=\"SELECT * FROM u WHERE id = ?\"") {
-		t.Errorf("render off should keep placeholder, got: %s", out)
-	}
-	if strings.Contains(out, "id = 1") {
-		t.Errorf("render off should not substitute, got: %s", out)
-	}
-}
-
-// TestLogQuery_RenderEnabled 验证全局开启时 sql 字段为组装后 SQL。
-func TestLogQuery_RenderEnabled(t *testing.T) {
-	orig := IsRenderSQLEnabled()
-	SetRenderSQL(true)
-	defer SetRenderSQL(orig)
-
-	buf, restore := captureLogger(slog.LevelDebug)
-	defer restore()
-	LogQuery(context.Background(), QueryInfo{
-		Op:       "SELECT",
-		SQL:      "SELECT * FROM u WHERE id = $1",
-		Args:     []any{int64(7)},
-		Duration: 1 * time.Millisecond,
-	})
-	out := buf.String()
-	if !strings.Contains(out, "sql=\"SELECT * FROM u WHERE id = 7\"") {
-		t.Errorf("render on should substitute, got: %s", out)
-	}
-}
-
-// TestLogQuery_RenderCtxOverride 验证 ctx 覆盖优先于全局。
-func TestLogQuery_RenderCtxOverride(t *testing.T) {
-	orig := IsRenderSQLEnabled()
-	SetRenderSQL(true) // 全局开
-	defer SetRenderSQL(orig)
-
-	buf, restore := captureLogger(slog.LevelDebug)
-	defer restore()
-	// ctx 显式关闭，覆盖全局
-	ctx := WithRenderSQL(context.Background(), false)
-	LogQuery(ctx, QueryInfo{
-		Op:       "SELECT",
-		SQL:      "SELECT * FROM u WHERE id = ?",
-		Args:     []any{int64(7)},
-		Duration: 1 * time.Millisecond,
-	})
-	out := buf.String()
-	if !strings.Contains(out, "id = ?") {
-		t.Errorf("ctx override off should keep placeholder, got: %s", out)
-	}
-}
-
-// TestLogQuery_RenderAfterRedaction 验证敏感列值在渲染前已脱敏（组装后 SQL 不含明文）。
-func TestLogQuery_RenderAfterRedaction(t *testing.T) {
-	orig := IsRenderSQLEnabled()
-	SetRenderSQL(true)
-	defer SetRenderSQL(orig)
-
-	buf, restore := captureLogger(slog.LevelDebug)
-	defer restore()
-	LogQuery(context.Background(), QueryInfo{
-		Op:       "SELECT",
-		SQL:      "SELECT * FROM u WHERE password = ?",
-		Args:     []any{"secret-pw"},
-		Duration: 1 * time.Millisecond,
-	})
-	out := buf.String()
-	// 渲染后的 sql 字段应含 '***' 而非明文
-	if !strings.Contains(out, "password = '***'") {
-		t.Errorf("redacted value should be rendered as '***', got: %s", out)
-	}
-	if strings.Contains(out, "secret-pw") {
-		t.Errorf("plaintext password leaked in rendered SQL, got: %s", out)
 	}
 }
 

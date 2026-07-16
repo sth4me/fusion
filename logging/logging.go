@@ -66,30 +66,7 @@ var (
 		"private_key": true, "privatekey": true, "credential": true, "credentials": true,
 	}
 	redactionEnabled = true
-
-	// renderSQL 控制日志是否把占位符 SQL 组装成可直接阅读的完整 SQL（默认关）。
-	// 开启后 LogQuery 输出的 sql 字段为 $N/? 已替换为参数字面量的版本；
-	// 传给驱动的 SQL 不受影响（仍参数化）。脱敏在渲染前完成，敏感值不会泄露。
-	renderMu     sync.RWMutex
-	renderSQLEnabled = false
 )
-
-// SetRenderSQL 开启/关闭日志的 SQL 组装渲染（默认关）。
-// 开启后，日志 sql 字段会把占位符（? 或 $N）按顺序替换为参数字面量，
-// 便于人眼直接阅读调试。传给驱动的 SQL 不受影响（仍走参数化执行）。
-// 可在调试时打开、生产关闭；也可用 WithRenderSQL 做 per-ctx 覆盖。
-func SetRenderSQL(enabled bool) {
-	renderMu.Lock()
-	defer renderMu.Unlock()
-	renderSQLEnabled = enabled
-}
-
-// IsRenderSQLEnabled 返回全局 SQL 组装渲染开关当前状态。
-func IsRenderSQLEnabled() bool {
-	renderMu.RLock()
-	defer renderMu.RUnlock()
-	return renderSQLEnabled
-}
 
 // AddSensitiveColumn 追加需脱敏的列名（大小写不敏感）。
 // 匹配到的列对应的参数值在日志中替换为 "***"。
@@ -221,21 +198,13 @@ func LogQuery(ctx context.Context, info QueryInfo) {
 	}
 
 	// 2. 记录 slog（按内容选级别）
-	// 敏感字段脱敏：把敏感列对应的参数值替换为 "***"（仅影响日志输出，不改原 Args）
+	// 敏感字段脱敏：把敏感列对应的参数值替换为 "***"（仅影响日志输出，不改原 Args）。
+	// SQL 始终记占位符模板 + args（结构化，便于聚合/解析）。
+	// 要看组装好的可粘贴 SQL，用 NewDebugSQLHandler——它自带渲染，不在此处拼。
 	logArgs := redactArgs(info.SQL, info.Args)
-	// SQL 组装渲染：开启后把占位符替换为参数字面量（用脱敏后的 logArgs，
-	// 顺序保证敏感值不会泄露）。默认关；优先 ctx 覆盖，无则全局。
-	sqlOut := info.SQL
-	enabled := IsRenderSQLEnabled()
-	if r, ok := renderSQLFromCtx(ctx); ok {
-		enabled = r
-	}
-	if enabled {
-		sqlOut = RenderSQL(info.SQL, logArgs)
-	}
 	attrs := []any{
 		slog.String("op", info.Op),
-		slog.String("sql", sqlOut),
+		slog.String("sql", info.SQL),
 		slog.Any("args", logArgs),
 		slog.Duration("duration", info.Duration),
 		slog.Int64("rows", info.RowsAffected),
@@ -264,11 +233,9 @@ func LogQuery(ctx context.Context, info QueryInfo) {
 type ctxLoggerKey struct{}
 
 // ctxOverride 携带 Engine 注入的 logger 和 slow 阈值（slow<0 表示用全局）。
-// render 为 SQL 组装渲染的 per-ctx 覆盖：nil 表示沿用全局开关。
 type ctxOverride struct {
 	logger *slog.Logger
 	slow   time.Duration
-	render *bool
 }
 
 // WithOverride 把 logger/slow 覆盖挂到 ctx，返回新 ctx。
@@ -278,30 +245,12 @@ func WithOverride(ctx context.Context, lg *slog.Logger, slow time.Duration) cont
 	return context.WithValue(ctx, ctxLoggerKey{}, ctxOverride{logger: lg, slow: slow})
 }
 
-// WithRenderSQL 把 SQL 组装渲染开关挂到 ctx，返回新 ctx。
-// 用于 per-call/per-Engine 覆盖全局 SetRenderSQL（如调试某段代码时局部开启）。
-// 传 true 开启组装渲染（日志输出完整 SQL），false 显式关闭，不调用则沿用全局。
-func WithRenderSQL(ctx context.Context, enabled bool) context.Context {
-	// 合并到已有 override（保留 logger/slow），若无则新建
-	existing, _ := ctx.Value(ctxLoggerKey{}).(ctxOverride)
-	existing.render = &enabled
-	return context.WithValue(ctx, ctxLoggerKey{}, existing)
-}
-
 // loggerFromCtx 从 ctx 取 per-Engine 覆盖（若有）。
 func loggerFromCtx(ctx context.Context) (*slog.Logger, time.Duration, bool) {
 	if o, ok := ctx.Value(ctxLoggerKey{}).(ctxOverride); ok {
 		return o.logger, o.slow, true
 	}
 	return nil, 0, false
-}
-
-// renderSQLFromCtx 返回 per-ctx 渲染覆盖；ok=false 表示无覆盖，调用方用全局。
-func renderSQLFromCtx(ctx context.Context) (bool, bool) {
-	if o, ok := ctx.Value(ctxLoggerKey{}).(ctxOverride); ok && o.render != nil {
-		return *o.render, true
-	}
-	return false, false
 }
 
 // discardHandler 丢弃所有日志的 slog.Handler（用于 SetLogger(nil) 或静默场景）。

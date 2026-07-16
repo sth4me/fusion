@@ -279,22 +279,9 @@ func AddQueryHook(h QueryHook) (unregister func()) { return logging.AddQueryHook
 // SetSlowThreshold 设置慢查询阈值（默认 200ms）。超过则 Warn 级记录。
 func SetSlowThreshold(d time.Duration) { logging.SetSlowThreshold(d) }
 
-// SetRenderSQL 开启/关闭日志的 SQL 组装渲染（默认关）。
-// 开启后，日志的 sql 字段会把占位符（? 或 $N）按顺序替换为参数字面量，
-// 输出可直接阅读的完整 SQL，免去人眼对位 args 的麻烦。
-// 传给驱动的 SQL 不受影响（仍走参数化执行）；敏感列的值在渲染前已脱敏。
-// 用法：调试时 fusion.SetRenderSQL(true)，生产环境保持关闭。
-func SetRenderSQL(enabled bool) { logging.SetRenderSQL(enabled) }
-
-// WithRenderSQL 把 SQL 组装渲染开关挂到 ctx，返回新 ctx（覆盖全局 SetRenderSQL）。
-// 用于局部开启，如某段代码调试：ctx = fusion.WithRenderSQL(ctx, true)。
-func WithRenderSQL(ctx context.Context, enabled bool) context.Context {
-	return logging.WithRenderSQL(ctx, enabled)
-}
-
 // NewDebugSQLHandler 创建面向调试的 slog.Handler，把每条查询日志渲染成
 // 一行可直接复制粘贴到 SQL 工具执行的纯文本 SQL（不经过 slog 的引号转义，
-// PG 双引号标识符 "user_id" 原样保留）。自带 SQL 组装，不依赖 SetRenderSQL。
+// PG 双引号标识符 "user_id" 原样保留）。自带 SQL 组装，不依赖全局开关。
 //
 // 调试用法（临时替换全局 logger；生产保持默认结构化 handler 不变）：
 //

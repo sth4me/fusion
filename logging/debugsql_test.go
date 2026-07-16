@@ -98,23 +98,18 @@ func TestDebugSQLHandler_NoArgs(t *testing.T) {
 }
 
 // TestDebugSQLHandler_IntegrationWithLogQuery 端到端：挂 handler 走 LogQuery，
-// 验证真实链路下输出零转义可粘贴。
+// 验证真实链路下输出零转义可粘贴（handler 自带渲染，不依赖任何全局开关）。
 func TestDebugSQLHandler_IntegrationWithLogQuery(t *testing.T) {
 	origLogger := Logger()
 	buf := &bytes.Buffer{}
 	SetLogger(slog.New(NewDebugSQLHandler(buf, slog.LevelDebug)))
 	defer SetLogger(origLogger)
 
-	// 确保全局渲染开关关闭，证明 handler 自带渲染不依赖它
-	origRender := IsRenderSQLEnabled()
-	SetRenderSQL(false)
-	defer SetRenderSQL(origRender)
-
 	LogQuery(context.Background(), QueryInfo{
-		Op:       "SELECT",
-		SQL:      "SELECT \"id\" FROM \"users\" WHERE \"id\" = $1",
-		Args:     []any{int64(42)},
-		Duration: 2 * time.Millisecond,
+		Op:           "SELECT",
+		SQL:          "SELECT \"id\" FROM \"users\" WHERE \"id\" = $1",
+		Args:         []any{int64(42)},
+		Duration:     2 * time.Millisecond,
 		RowsAffected: 1,
 	})
 	out := buf.String()
@@ -123,5 +118,35 @@ func TestDebugSQLHandler_IntegrationWithLogQuery(t *testing.T) {
 	}
 	if strings.Contains(out, `\"`) {
 		t.Errorf("integration: no escaping expected, got: %s", out)
+	}
+}
+
+// TestDebugSQLHandler_RedactionPreserved 验证 LogQuery 在到达 handler 前已脱敏：
+// 敏感列的值在 handler 渲染后的 SQL 里仍是 ***，不泄露明文。
+func TestDebugSQLHandler_RedactionPreserved(t *testing.T) {
+	origLogger := Logger()
+	buf := &bytes.Buffer{}
+	SetLogger(slog.New(NewDebugSQLHandler(buf, slog.LevelDebug)))
+	defer SetLogger(origLogger)
+
+	LogQuery(context.Background(), QueryInfo{
+		Op:           "SELECT",
+		SQL:          "SELECT * FROM users WHERE password = $1 AND id = $2",
+		Args:         []any{"secret-pw", int64(7)},
+		Duration:     time.Millisecond,
+		RowsAffected: 1,
+	})
+	out := buf.String()
+	// 敏感列 password 的值应被脱敏为 ***
+	if !strings.Contains(out, "password = '***'") {
+		t.Errorf("redacted password should be ***, got: %s", out)
+	}
+	// 明文不得出现在输出
+	if strings.Contains(out, "secret-pw") {
+		t.Errorf("plaintext password leaked, got: %s", out)
+	}
+	// 非敏感列 id 的值应正常渲染
+	if !strings.Contains(out, "id = 7") {
+		t.Errorf("non-sensitive value should render normally, got: %s", out)
 	}
 }
