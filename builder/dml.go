@@ -77,16 +77,26 @@ func BuildINSERTBatch(m *meta.ModelMeta, q InsertQuery, rows [][]any, d dialect.
 }
 
 // renderUpsertSets 渲染自定义 SET 表达式的 UPSERT 子句。
-//   PG/SQLite: `ON CONFLICT (col1, col2) DO UPDATE SET "a" = ... + excluded."b", ...`
-//   MySQL:     `ON DUPLICATE KEY UPDATE `a` = ... + VALUES(`b`), ...`
+//   PG/SQLite: `ON CONFLICT (col1, col2) DO UPDATE SET "table"."a" = "table"."a" + excluded."b", ...`
+//   MySQL:     `ON DUPLICATE KEY UPDATE `a` = `a` + VALUES(`b`), ...`
 // Col 是裸列名，由本函数引用。渲染过程中通过 r（renderer）收集参数。
+//
+// 特别地，SET 右值的列引用强制保留表前缀（临时启用 keepPrefix）：
+// PG 在 ON CONFLICT DO UPDATE SET 上下文中，裸列名（如 "available"）会与
+// EXCLUDED."available" 形成歧义（SQLSTATE 42702）。保留 "stocks"."available"
+// 形式可消除歧义——左操作数明确指向目标表，EXCLUDED.col 明确指向候选行。
 func renderUpsertSets(r *renderer, d dialect.Dialect, conflictCols []string, sets []UpsertSet) string {
 	target := d.ConflictTarget(conflictCols)
+	// 临时启用 keepPrefix，让 expr.Column("table", "col") 渲染为 "table"."col"
+	// 而非单表去前缀的 "col"。MySQL 不存在歧义但保留前缀也无害。
+	prevKeepPrefix := r.keepPrefix
+	r.keepPrefix = true
 	setsSQL := make([]string, 0, len(sets))
 	for _, s := range sets {
 		// 裸列名引用 + 右值由 UpsertValue 渲染
 		setsSQL = append(setsSQL, d.QuoteIdent(s.Col)+" = "+s.Value.RenderUpsert(r))
 	}
+	r.keepPrefix = prevKeepPrefix
 	switch d.Name() {
 	case "mysql":
 		return " ON DUPLICATE KEY UPDATE " + strings.Join(setsSQL, ", ")

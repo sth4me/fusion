@@ -74,7 +74,7 @@ func TestBuildINSERTUpsertSet(t *testing.T) {
 		},
 	}, []any{1, "alice", 30}, dialect.PostgresDialect)
 
-	want := `INSERT INTO "users" ("id", "name", "age") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "age" = ("age" + excluded."age")`
+	want := `INSERT INTO "users" ("id", "name", "age") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "age" = ("users"."age" + excluded."age")`
 	if sqlStr != want {
 		t.Errorf("PG: got %q, want %q", sqlStr, want)
 	}
@@ -92,7 +92,7 @@ func TestBuildINSERTUpsertSet(t *testing.T) {
 		},
 	}, []any{1, "alice", 30}, dialect.MySQLDialect)
 
-	wantMy := "INSERT INTO `users` (`id`, `name`, `age`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `age` = (`age` + VALUES(`age`))"
+	wantMy := "INSERT INTO `users` (`id`, `name`, `age`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `age` = (`users`.`age` + VALUES(`age`))"
 	if sqlMy != wantMy {
 		t.Errorf("MySQL: got %q, want %q", sqlMy, wantMy)
 	}
