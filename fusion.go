@@ -157,6 +157,46 @@ func Raw[T any](out *[]T, ctx context.Context, db DB, sqlStr string, args ...any
 	return nil
 }
 
+// Exec 执行原始写 SQL（INSERT/UPDATE/DELETE，含 ON CONFLICT 累加等复杂语句）。
+// 与 Raw 对称：Raw 用于扫描 SELECT 结果，Exec 用于不扫描的写操作。
+// db 若是 WrapDB 的结果则事务感知（ETx 回调内走事务连接）。
+// 适合：OnConflict 不支持的累加语义、批量 UPDATE FROM、DDL 局部补丁等。
+// 返回 sql.Result（可取 RowsAffected）。
+func Exec(ctx context.Context, db DB, sqlStr string, args ...any) (sql.Result, error) {
+	start := time.Now()
+	res, err := db.ExecContext(ctx, sqlStr, args...)
+	var rowsAffected int64
+	if err == nil && res != nil {
+		rowsAffected, _ = res.RowsAffected()
+	}
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "EXEC", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: err})
+	if err != nil {
+		return nil, fmt.Errorf("fusion: exec: %w", err)
+	}
+	return res, nil
+}
+
+// ExecReturning 执行原始写 SQL 并扫描 RETURNING 子句的结果（PostgreSQL/SQLite）。
+// 兼具 Exec（写）与 Raw（扫描）的能力，适合 INSERT ... RETURNING "id" 之类场景。
+// out 必须指向已注册模型类型的切片。
+func ExecReturning[T any](out *[]T, ctx context.Context, db DB, sqlStr string, args ...any) error {
+	t := meta.Register[T]("")
+	start := time.Now()
+	rows, err := db.QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		logging.LogQuery(ctx, logging.QueryInfo{Op: "EXEC", SQL: sqlStr, Args: args, Duration: time.Since(start), Err: err})
+		return fmt.Errorf("fusion: exec returning: %w", err)
+	}
+	defer rows.Close()
+	res, err := scan.All[T](rows, t.Meta)
+	logging.LogQuery(ctx, logging.QueryInfo{Op: "EXEC", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: int64(len(res)), Err: err})
+	if err != nil {
+		return err
+	}
+	*out = res
+	return nil
+}
+
 // --- 事务（见 docs/DESIGN.md #6）---
 
 // TxMode 事务嵌套模式（savepoint / reuse）。

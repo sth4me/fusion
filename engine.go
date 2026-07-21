@@ -182,6 +182,19 @@ func ERaw[T any](e *Engine, out *[]T, ctx context.Context, sqlStr string, args .
 	return Raw[T](out, e.wrapCtx(ctx), e.wrapped(), sqlStr, args...)
 }
 
+// EExec 执行原始写 SQL（经 Engine，事务感知 + logger 覆盖）。
+// 用于 OnConflict 不支持的累加语义、批量 UPDATE FROM 等。
+// 返回 sql.Result（可取 RowsAffected）。
+func EExec(e *Engine, ctx context.Context, sqlStr string, args ...any) (sql.Result, error) {
+	return Exec(e.wrapCtx(ctx), e.wrapped(), sqlStr, args...)
+}
+
+// EExecReturning 执行原始写 SQL 并扫描 RETURNING 子句（经 Engine，事务感知）。
+// 适合 INSERT ... RETURNING "id" 之类场景。
+func EExecReturning[T any](e *Engine, out *[]T, ctx context.Context, sqlStr string, args ...any) error {
+	return ExecReturning[T](out, e.wrapCtx(ctx), e.wrapped(), sqlStr, args...)
+}
+
 // ETx 在事务中执行 fn（用 Engine 的默认事务选项/模式）。
 // fn 中用 EFrom(engine, t)/EInsert(engine, ...) 并传 fn 的 ctx，自动走事务。
 func ETx(e *Engine, ctx context.Context, fn func(ctx context.Context) error) error {

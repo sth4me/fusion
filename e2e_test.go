@@ -226,6 +226,59 @@ func TestE2E_Raw(t *testing.T) {
 	}
 }
 
+// TestE2E_Exec 验证 Exec 执行原生写 SQL，返回 sql.Result 含 RowsAffected。
+// 与 Raw 对称：Raw 用于扫描 SELECT，Exec 用于不扫描的 INSERT/UPDATE/DELETE。
+func TestE2E_Exec(t *testing.T) {
+	db := openSQLite(t)
+	defer db.Close()
+	seedUsers(t, db)
+
+	fusion.SetDefaultDialect(dialect.SQLiteDialect)
+
+	// UPDATE 全表 age > 20 的 name 加后缀
+	res, err := fusion.Exec(context.Background(), db,
+		`UPDATE users SET name = name || '!' WHERE age > ?`, 20)
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	n, _ := res.RowsAffected()
+	if n != 2 {
+		t.Fatalf("rowsAffected = %d, want 2 (alice, carol)", n)
+	}
+
+	// 用 Raw 验证生效
+	var users []User
+	_ = fusion.Raw[User](&users, context.Background(), db,
+		`SELECT id, name FROM users WHERE age > ? ORDER BY id`, 20)
+	if len(users) != 2 || users[0].Name.Get() != "alice!" {
+		t.Fatalf("Exec 未生效，users = %+v", users)
+	}
+}
+
+// TestE2E_ExecReturning 验证 ExecReturning 扫描 INSERT ... RETURNING 结果（SQLite 支持 RETURNING）。
+func TestE2E_ExecReturning(t *testing.T) {
+	db := openSQLite(t)
+	defer db.Close()
+	seedUsers(t, db)
+
+	fusion.SetDefaultDialect(dialect.SQLiteDialect)
+
+	// SQLite 3.35+ 支持 RETURNING
+	var got []User
+	err := fusion.ExecReturning[User](&got, context.Background(), db,
+		`INSERT INTO users (id, name, age, email) VALUES (?, ?, ?, NULL) RETURNING id, name, age, email`,
+		99, "zoe", 40)
+	if err != nil {
+		t.Fatalf("exec returning: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got))
+	}
+	if got[0].Name.Get() != "zoe" {
+		t.Fatalf("name = %s, want zoe", got[0].Name.Get())
+	}
+}
+
 // TestE2E_JSONTransparent 验证 JSON 透明序列化贯穿 ORM
 func TestE2E_JSONTransparent(t *testing.T) {
 	db := openSQLite(t)
