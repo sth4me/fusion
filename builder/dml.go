@@ -73,6 +73,8 @@ func BuildINSERTBatch(m *meta.ModelMeta, q InsertQuery, rows [][]any, d dialect.
 		sql += " RETURNING " + quoteList(q.ReturningCols, d)
 	}
 
+	// 合并 renderer 收集的参数（ConflictSets 的 Literal/RawExpr 参数，按渲染顺序追加在 INSERT 值之后）
+	args = append(args, r.Args()...)
 	return sql, args
 }
 

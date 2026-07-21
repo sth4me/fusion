@@ -98,6 +98,31 @@ func TestBuildINSERTUpsertSet(t *testing.T) {
 	}
 }
 
+// TestBuildINSERTUpsertSetWithLiteral 验证带 Literal 参数的 OnConflictSet：参数应追加在 INSERT 值之后。
+func TestBuildINSERTUpsertSetWithLiteral(t *testing.T) {
+	m := dmlMeta()
+	sqlStr, args := BuildINSERT(m, InsertQuery{
+		Cols:         []string{"id", "name", "age"},
+		DoUpsert:     true,
+		ConflictCols: []string{"id"},
+		ConflictSets: []UpsertSet{
+			{Col: "age", Value: expr.Add(expr.Column("users", "age"), expr.Literal(1))},
+		},
+	}, []any{1, "alice", 30}, dialect.PostgresDialect)
+
+	want := `INSERT INTO "users" ("id", "name", "age") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "age" = ("users"."age" + $4)`
+	if sqlStr != want {
+		t.Errorf("got %q, want %q", sqlStr, want)
+	}
+	// 3 INSERT 值 + 1 Literal 参数 = 4
+	if len(args) != 4 {
+		t.Errorf("args count = %d, want 4（3 INSERT + 1 Literal）", len(args))
+	}
+	if args[3] != 1 {
+		t.Errorf("args[3] = %v, want 1（Literal 参数）", args[3])
+	}
+}
+
 func TestBuildUPDATEBasic(t *testing.T) {
 	m := dmlMeta()
 	sqlStr, args := BuildUPDATE(m, UpdateQuery{
