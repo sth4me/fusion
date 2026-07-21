@@ -38,6 +38,8 @@ type Inserter[T any] struct {
 	doUpsert       bool
 	conflictFields []string
 	updateFields   []string
+	// conflictSets 自定义 SET 表达式（非空时覆盖 updateFields 的覆盖语义）。
+	conflictSets []builder.UpsertSet
 }
 
 // NewInsert 构造单条 Inserter。
@@ -58,10 +60,35 @@ func (i *Inserter[T]) Batch(targets []*T) *Inserter[T] {
 }
 
 // OnConflict 配置 UPSERT 冲突目标与更新列（字段列名）。
+// 冲突时执行覆盖语义：col = excluded.col（PG/SQLite）/ col = VALUES(col)（MySQL）。
 func (i *Inserter[T]) OnConflict(conflictCols, updateCols []string) *Inserter[T] {
 	i.doUpsert = true
 	i.conflictFields = conflictCols
 	i.updateFields = updateCols
+	i.conflictSets = nil // 互斥：OnConflict 覆盖 OnConflictSet
+	return i
+}
+
+// OnConflictSet 配置 UPSERT 冲突目标与自定义 SET 表达式（支持累加/算术等）。
+// 与 OnConflict 互斥：后调的覆盖前者。
+//
+// 用法（库存累加：冲突时 available = stocks.available + excluded.available）：
+//
+//	fusion.EInsert(engine, Stocks, po).
+//	    OnConflictSet(
+//	        []string{"sku_id", "location_id"},
+//	        []builder.UpsertSet{
+//	            {Col: "available", Value: expr.Add(expr.Column("stocks", "available"), expr.Excluded("available"))},
+//	            {Col: "version",   Value: expr.Add(expr.Column("stocks", "version"), expr.Literal(1))},
+//	        },
+//	    ).Exec(ctx)
+//
+// Col 接收裸列名（自动引用），conflictCols 同 OnConflict 也是裸列名。
+func (i *Inserter[T]) OnConflictSet(conflictCols []string, sets []builder.UpsertSet) *Inserter[T] {
+	i.doUpsert = true
+	i.conflictFields = conflictCols
+	i.updateFields = nil // 互斥
+	i.conflictSets = sets
 	return i
 }
 
@@ -180,6 +207,46 @@ func (i *Inserter[T]) Exec(ctx context.Context) error {
 	return i.execSingle(ctx)
 }
 
+// SQL 渲染最终 SQL 与参数，不执行。供调试日志、单元测试或自定义执行路径用。
+// 单条场景：渲染单行 INSERT；批量场景：渲染多行批 INSERT。
+// 不触发 BeforeCreate 钩子（钩子在 Exec 路径触发）。
+func (i *Inserter[T]) SQL() (string, []any, error) {
+	if len(i.targets) > 0 {
+		cols := i.unionBatchCols()
+		rows := make([][]any, 0, len(i.targets))
+		for _, t := range i.targets {
+			rows = append(rows, i.collectRowAligned(t, cols))
+		}
+		q := builder.InsertQuery{
+			Cols:          cols,
+			ReturningCols: i.returningCols(),
+			DoUpsert:      i.doUpsert,
+			ConflictCols:  i.conflictFields,
+			UpdateCols:    i.updateFields,
+			ConflictSets:  i.conflictSets,
+		}
+		sqlStr, args := builder.BuildINSERTBatch(i.table.Meta, q, rows, i.d)
+		return sqlStr, args, nil
+	}
+	if i.target == nil {
+		return "", nil, fmt.Errorf("fusion: Inserter.SQL: target 未设置")
+	}
+	cols, vals, err := i.collectSetCols(i.target)
+	if err != nil {
+		return "", nil, err
+	}
+	q := builder.InsertQuery{
+		Cols:          cols,
+		ReturningCols: i.returningCols(),
+		DoUpsert:      i.doUpsert,
+		ConflictCols:  i.conflictFields,
+		UpdateCols:    i.updateFields,
+		ConflictSets:  i.conflictSets,
+	}
+	sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
+	return sqlStr, args, nil
+}
+
 // execSingle 单条插入。
 func (i *Inserter[T]) execSingle(ctx context.Context) error {
 	// BeforeCreate 钩子
@@ -199,6 +266,7 @@ func (i *Inserter[T]) execSingle(ctx context.Context) error {
 		DoUpsert:      i.doUpsert,
 		ConflictCols:  i.conflictFields,
 		UpdateCols:    i.updateFields,
+		ConflictSets:  i.conflictSets,
 	}
 	sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
 
@@ -254,6 +322,7 @@ func (i *Inserter[T]) execBatch(ctx context.Context) error {
 		DoUpsert:      i.doUpsert,
 		ConflictCols:  i.conflictFields,
 		UpdateCols:    i.updateFields,
+		ConflictSets:  i.conflictSets,
 	}
 	sqlStr, args := builder.BuildINSERTBatch(i.table.Meta, q, rows, i.d)
 

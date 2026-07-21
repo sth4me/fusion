@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"github.com/sth4me/fusion"
+	"github.com/sth4me/fusion/builder"
 	"github.com/sth4me/fusion/col"
 	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/expr"
 
 	// 纯 Go SQLite 驱动（无 CGO）
 	_ "modernc.org/sqlite"
@@ -276,6 +278,46 @@ func TestE2E_ExecReturning(t *testing.T) {
 	}
 	if got[0].Name.Get() != "zoe" {
 		t.Fatalf("name = %s, want zoe", got[0].Name.Get())
+	}
+}
+
+// TestE2E_UpsertOnConflictSet 验证 Inserter.OnConflictSet 端到端：Exec 路径完整执行 + 累加生效。
+//   场景：alice 已存在 age=30，再 Insert 同 id age=10 → 冲突时 age = age + excluded.age = 40
+func TestE2E_UpsertOnConflictSet(t *testing.T) {
+	db := openSQLite(t)
+	defer db.Close()
+	seedUsers(t, db)
+
+	fusion.SetDefaultDialect(dialect.SQLiteDialect)
+	Users := fusion.Register[User]("users")
+
+	alice := User{}
+	alice.ID.Set(1)
+	alice.Name.Set("alice")
+	alice.Age.Set(10)
+
+	err := fusion.Insert(Users, db, &alice).
+		OnConflictSet(
+			[]string{"id"},
+			[]builder.UpsertSet{
+				{Col: "age", Value: expr.Add(expr.Column("users", "age"), expr.Excluded("age"))},
+			},
+		).Exec(context.Background())
+	if err != nil {
+		t.Fatalf("OnConflictSet.Exec: %v", err)
+	}
+
+	// 用 Raw 读回验证：alice.age 应 = 30 + 10 = 40
+	var got []User
+	if err := fusion.Raw[User](&got, context.Background(), db,
+		`SELECT id, name, age, email FROM users WHERE id = ?`, 1); err != nil {
+		t.Fatalf("Raw: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got))
+	}
+	if got[0].Age.Get() != 40 {
+		t.Errorf("age = %d, want 40（累加 30+10）", got[0].Age.Get())
 	}
 }
 

@@ -35,6 +35,10 @@ type Renderer interface {
 	// QuoteCol 引用一个列引用表达式（可能含表别名前缀 "t0.name"），
 	// 按各方言分别 quote（PG/SQLite: "t0"."name"；MySQL: `t0`.`name`）。
 	QuoteCol(tableCol string) string
+	// ExcludedRef 引用 UPSERT 场景下"插入候选值"（EXCLUDED.col 或 VALUES(col)）。
+	// 由 UpsertValue 表达式（Excluded/Column 的累加等）使用。
+	// 旧实现（自定义 Renderer）返回空串即可，不影响 SELECT/WHERE 路径。
+	ExcludedRef(col string) string
 }
 
 // DialectNamer 是 Renderer 可选实现的接口，供需要方言感知的表达式（如 EqDistinct
@@ -464,3 +468,112 @@ func SkipNonCode(sql string, i int) int {
 	}
 	return i
 }
+
+// =====================================================================
+// UpsertValue: ON CONFLICT 自定义表达式（累加/算术等）
+// =====================================================================
+
+// UpsertValue 是 UPSERT 冲突时 SET 子句的右值表达式。
+// 与 expr.Expr（WHERE 用）不同：UpsertValue 用于 SET col = <expr>，
+// 支持 EXCLUDED.col / 表.col / 字面量 / 算术组合。
+//
+// 例：库存累加 stocks.available + excluded.available
+//
+//	expr.Add(expr.Column("stocks", "available"), expr.Excluded("available"))
+type UpsertValue interface {
+	// RenderUpsert 渲染为 SQL 片段（不含"列名="前缀），参数经 Renderer 收集。
+	RenderUpsert(r Renderer) string
+}
+
+// --- 节点实现 ---
+
+// upExcluded 引用插入候选行的列值（EXCLUDED.col / VALUES(col)）。
+type upExcluded struct{ col string }
+
+func (e upExcluded) RenderUpsert(r Renderer) string { return r.ExcludedRef(e.col) }
+
+// upTableCol 引用当前表已有行的列值（用于累加：stocks.col + excluded.col）。
+type upTableCol struct{ table, col string }
+
+func (c upTableCol) RenderUpsert(r Renderer) string {
+	if c.table != "" {
+		return r.QuoteCol(c.table + "." + c.col)
+	}
+	return r.QuoteCol(c.col)
+}
+
+// upRaw 字面量或带参数的原始 SQL 片段（复杂场景兜底）。
+// 用 ? 作占位符，render 时由 Renderer 替换为方言占位符。
+type upRaw struct {
+	sql  string
+	args []any
+}
+
+func (v upRaw) RenderUpsert(r Renderer) string {
+	out := v.sql
+	for _, a := range v.args {
+		r.AddParam(a)
+		out = replaceFirst(out, "?", r.NextPlaceholder())
+	}
+	return out
+}
+
+// replaceFirst 替换 s 中第一个 old 为 new（用于 ? → $N 的逐个替换）。
+func replaceFirst(s, old, new string) string {
+	idx := -1
+	for i := 0; i+len(old) <= len(s); i++ {
+		if s[i:i+len(old)] == old {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return s
+	}
+	return s[:idx] + new + s[idx+len(old):]
+}
+
+// upBinary 算术组合（+/-/*//）。
+type upBinary struct {
+	op          string
+	left, right UpsertValue
+}
+
+func (b upBinary) RenderUpsert(r Renderer) string {
+	return "(" + b.left.RenderUpsert(r) + " " + b.op + " " + b.right.RenderUpsert(r) + ")"
+}
+
+// upParen 显式括号包裹（组合优先级控制）。
+type upParen struct{ inner UpsertValue }
+
+func (p upParen) RenderUpsert(r Renderer) string { return "(" + p.inner.RenderUpsert(r) + ")" }
+
+// --- 构造函数 ---
+
+// Excluded 引用插入候选行的列值（冲突时的新值）。
+//   - PG/SQLite: EXCLUDED."col"
+//   - MySQL: VALUES(`col`)
+func Excluded(col string) UpsertValue { return upExcluded{col: col} }
+
+// Column 引用当前表已有行的列值（用于累加场景，如 stocks.col）。
+// table 可空（仅传 col 表示单表当前行）。
+func Column(table, col string) UpsertValue { return upTableCol{table: table, col: col} }
+
+// Literal 字面量值（参数化，防 SQL 注入）。
+func Literal(v any) UpsertValue { return upRaw{sql: "?", args: []any{v}} }
+
+// RawExpr 原始 SQL 表达式（兜底，args 对应 SQL 中的 ? 占位符）。
+// 慎用：优先用 Excluded/Column/Literal/算术组合。
+func RawExpr(sql string, args ...any) UpsertValue { return upRaw{sql: sql, args: args} }
+
+// Add 加法：a + b（自动加括号）。
+func Add(a, b UpsertValue) UpsertValue { return upBinary{op: "+", left: a, right: b} }
+
+// Sub 减法：a - b。
+func Sub(a, b UpsertValue) UpsertValue { return upBinary{op: "-", left: a, right: b} }
+
+// Mul 乘法：a * b。
+func Mul(a, b UpsertValue) UpsertValue { return upBinary{op: "*", left: a, right: b} }
+
+// Paren 显式括号包裹（控制组合优先级）。
+func Paren(inner UpsertValue) UpsertValue { return upParen{inner: inner} }

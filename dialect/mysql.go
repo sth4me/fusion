@@ -43,3 +43,10 @@ func (*MySQL) UpsertOnConflict(conflictCols, updateCols []string) string {
 	out += joinCSV(sets)
 	return out
 }
+
+// ExcludedRef 渲染 MySQL 的"插入候选值"引用。
+// MySQL 用 VALUES(col) 函数（MySQL 8.0 起推荐别名 `col AS new` 但 VALUES 兼容更广）。
+func (*MySQL) ExcludedRef(col string) string { return "VALUES(" + col + ")" }
+
+// ConflictTarget MySQL 不显式指定冲突列（ON DUPLICATE KEY 自动判定），返回空串。
+func (*MySQL) ConflictTarget(_ []string) string { return "" }

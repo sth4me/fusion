@@ -62,6 +62,42 @@ func TestBuildINSERTUpsert(t *testing.T) {
 	}
 }
 
+// TestBuildINSERTUpsertSet 验证 OnConflictSet 自定义表达式渲染（累加场景）。
+func TestBuildINSERTUpsertSet(t *testing.T) {
+	m := dmlMeta()
+	sqlStr, args := BuildINSERT(m, InsertQuery{
+		Cols:         []string{"id", "name", "age"},
+		DoUpsert:     true,
+		ConflictCols: []string{"id"},
+		ConflictSets: []UpsertSet{
+			{Col: "age", Value: expr.Add(expr.Column("users", "age"), expr.Excluded("age"))},
+		},
+	}, []any{1, "alice", 30}, dialect.PostgresDialect)
+
+	want := `INSERT INTO "users" ("id", "name", "age") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "age" = ("age" + excluded."age")`
+	if sqlStr != want {
+		t.Errorf("PG: got %q, want %q", sqlStr, want)
+	}
+	if len(args) != 3 {
+		t.Errorf("args count = %d, want 3（无额外参数）", len(args))
+	}
+
+	// MySQL 路径
+	sqlMy, _ := BuildINSERT(m, InsertQuery{
+		Cols:         []string{"id", "name", "age"},
+		DoUpsert:     true,
+		ConflictCols: []string{"id"},
+		ConflictSets: []UpsertSet{
+			{Col: "age", Value: expr.Add(expr.Column("users", "age"), expr.Excluded("age"))},
+		},
+	}, []any{1, "alice", 30}, dialect.MySQLDialect)
+
+	wantMy := "INSERT INTO `users` (`id`, `name`, `age`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `age` = (`age` + VALUES(`age`))"
+	if sqlMy != wantMy {
+		t.Errorf("MySQL: got %q, want %q", sqlMy, wantMy)
+	}
+}
+
 func TestBuildUPDATEBasic(t *testing.T) {
 	m := dmlMeta()
 	sqlStr, args := BuildUPDATE(m, UpdateQuery{

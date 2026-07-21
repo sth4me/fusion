@@ -24,6 +24,9 @@ func (f *fakeRenderer) QuoteCol(tableCol string) string {
 	return out
 }
 
+// ExcludedRef 测试用 mock（MySQL 风格 VALUES(`col`)）。
+func (f *fakeRenderer) ExcludedRef(col string) string { return "VALUES(`" + col + "`)" }
+
 func splitDot(s string) []string {
 	out := []string{}
 	cur := ""

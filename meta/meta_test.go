@@ -21,9 +21,9 @@ type tModel struct {
 }
 
 func TestRegisterBasic(t *testing.T) {
-	tab := Register[tModel]("my_table")
-	if tab.Meta.Table != "my_table" {
-		t.Errorf("table got %q, want my_table", tab.Meta.Table)
+	tab := Register[tModel]("t_model")
+	if tab.Meta.Table != "t_model" {
+		t.Errorf("table got %q, want t_model", tab.Meta.Table)
 	}
 	if tab.Meta.Type.Kind() != reflect.Struct {
 		t.Errorf("type kind got %v", tab.Meta.Type.Kind())
@@ -42,7 +42,7 @@ func TestRegisterDefaultTableSnake(t *testing.T) {
 }
 
 func TestSnakeColumns(t *testing.T) {
-	tab := Register[tModel]("t")
+	tab := Register[tModel]("t_model")
 	cases := map[string]string{
 		"ID":        "id",
 		"Name":      "name",
@@ -81,7 +81,7 @@ func TestSnakeBoundaries(t *testing.T) {
 }
 
 func TestFieldByColumn(t *testing.T) {
-	tab := Register[tModel]("t")
+	tab := Register[tModel]("t_model")
 	fm := tab.Meta.FieldByColumn("created_at")
 	if fm == nil || fm.FieldName != "CreatedAt" {
 		t.Errorf("by column created_at got %v", fm)
@@ -92,16 +92,25 @@ func TestFieldByColumn(t *testing.T) {
 }
 
 func TestRegisterCached(t *testing.T) {
-	t1 := Register[tModel]("first")
-	t2 := Register[tModel]("second") // 不同 name 参数
+	// 同 name 二次注册：返回 cached 同指针
+	t1 := Register[tModel]("t_model")
+	t2 := Register[tModel]("t_model")
 	if t1 != t2 {
-		t.Error("repeated Register should return cached Table (same pointer)")
+		t.Error("repeated Register with same name should return cached Table (same pointer)")
 	}
+
+	// 不同 name 二次注册：必须 panic（fail-fast，防"同类型对应多张表"的编程错误）
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Register with conflicting name should panic")
+		}
+	}()
+	Register[tModel]("different_name")
 }
 
 func TestRegisterFillsProtoMeta(t *testing.T) {
 	// Register 应把列名填进原型实例的 mockDescriptor 字段
-	tab := Register[tModel]("t")
+	tab := Register[tModel]("t_model")
 	if tab.Proto.Name.col != "name" {
 		t.Errorf("proto Name.col got %q, want name", tab.Proto.Name.col)
 	}
@@ -134,7 +143,7 @@ func TestRegisterUnexportedSkipped(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	Register[tModel]("t")
+	Register[tModel]("t_model")
 	tab := Lookup(reflect.TypeOf(tModel{}))
 	if tab == nil {
 		t.Fatal("Lookup returned nil for registered type")
@@ -146,7 +155,7 @@ func TestLookup(t *testing.T) {
 
 // 全包装下，关联字段用标记接口识别（阶段3启用），MVP 阶段 IsRelation 应为 false。
 func TestFieldMetaNotRelation(t *testing.T) {
-	tab := Register[tModel]("t")
+	tab := Register[tModel]("t_model")
 	for _, f := range tab.Meta.Fields {
 		if f.IsRelation {
 			t.Errorf("field %s should not be relation in MVP", f.FieldName)

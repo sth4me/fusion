@@ -557,6 +557,9 @@ func (r *inRenderer) QuoteCol(s string) string {
 	return r.d.QuoteIdent(s)
 }
 
+// ExcludedRef 实现 expr.Renderer（preload 路径不涉及 UPSERT，返回空即可）。
+func (r *inRenderer) ExcludedRef(_ string) string { return "" }
+
 // quotedCols 返回逗号分隔的引用列名列表。
 func quotedCols(cm *meta.ModelMeta, d dialect.Dialect) string {
 	parts := make([]string, 0, len(cm.Fields))

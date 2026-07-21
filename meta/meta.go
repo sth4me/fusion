@@ -116,6 +116,13 @@ var (
 //
 // Register 通过反射遍历 T 的字段：对实现 FieldDescriptor 的字段调用 SetMeta，
 // 填充列名（默认蛇形化字段名）。热路径（查询/扫描）随后直接读取元数据，零反射。
+// Register 注册模型并返回 Table[T]。name 为数据库表名（空则用类型名蛇形化）。
+//
+// 同类型多次注册必须传一致的 name（或都为空走默认）——不一致直接 panic，
+// 暴露"同类型对应多张表"的编程错误（DDD 上一个实体只对应一张表）。
+//
+// Register 通过反射遍历 T 的字段：对实现 FieldDescriptor 的字段调用 SetMeta，
+// 填充列名（默认蛇形化字段名）。热路径（查询/扫描）随后直接读取元数据，零反射。
 func Register[T any](name string) *Table[T] {
 	var zero T
 	rt := reflect.TypeOf(zero)
@@ -126,9 +133,17 @@ func Register[T any](name string) *Table[T] {
 		panic(fmt.Sprintf("fusion: Register requires a struct, got %s", rt.Kind()))
 	}
 
+	// 规范化 name：空 → 类型名蛇形化，便于一致性比较。
+	canonical := name
+	if canonical == "" {
+		canonical = snake(rt.Name())
+	}
+
 	registryMu.RLock()
 	if cached, ok := registry[rt]; ok {
 		registryMu.RUnlock()
+		cachedTable := cached.(TableOf).ModelMeta().Table
+		checkRegisterName(rt, cachedTable, canonical)
 		return cached.(*Table[T])
 	}
 	registryMu.RUnlock()
@@ -137,13 +152,21 @@ func Register[T any](name string) *Table[T] {
 	defer registryMu.Unlock()
 	// double-check
 	if cached, ok := registry[rt]; ok {
+		cachedTable := cached.(TableOf).ModelMeta().Table
+		checkRegisterName(rt, cachedTable, canonical)
 		return cached.(*Table[T])
 	}
 
+	// 规范化 name 后调 registerInternal（持锁状态）。
 	if name == "" {
 		name = snake(rt.Name())
 	}
+	return registerInternal[T](rt, name)
+}
 
+// registerInternal 执行实际的元数据反射注册（无 name 一致性校验，供 Register 与 LookupOrCreateDefault 复用）。
+// 调用方持 registryMu 写锁。
+func registerInternal[T any](rt reflect.Type, name string) *Table[T] {
 	t := &Table[T]{
 		Meta: &ModelMeta{
 			Type:   rt,
@@ -224,6 +247,48 @@ func Register[T any](name string) *Table[T] {
 
 	registry[rt] = t
 	return t
+}
+
+// LookupOrCreateDefault 仅在类型未注册时以默认名（类型蛇形化）注册；已注册则返回缓存。
+// 供 fusion.Raw[T]/ExecReturning[T] 等不关心表名的兜底入口用——这些入口表名由 SQL 字面量决定，
+// 走 Register 路径会和业务侧的显式注册冲突。本函数跳过 name 一致性校验。
+func LookupOrCreateDefault[T any]() *Table[T] {
+	var zero T
+	rt := reflect.TypeOf(zero)
+	if rt.Kind() == reflect.Ptr {
+		rt = rt.Elem()
+	}
+
+	registryMu.RLock()
+	if cached, ok := registry[rt]; ok {
+		registryMu.RUnlock()
+		return cached.(*Table[T])
+	}
+	registryMu.RUnlock()
+
+	// 未注册 → 用默认名（蛇形化）注册。但若另一协程已用业务名注册，需复用它而非覆盖。
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if cached, ok := registry[rt]; ok {
+		return cached.(*Table[T])
+	}
+	// 走 Register 的注册逻辑（不复用其 checkRegisterName，因这里 name 是默认推导的）。
+	name := snake(rt.Name())
+	t := registerInternal[T](rt, name)
+	return t
+}
+
+// checkRegisterName 校验同类型多次注册时 name 是否一致。
+// 不一致直接 panic：暴露"同类型对应多张表"的编程错误（一个实体只对应一张表）。
+// 这是 fail-fast 策略——cache 锁定后悄悄用错表名比 panic 更难排查。
+func checkRegisterName(rt reflect.Type, cachedTable, wantName string) {
+	if cachedTable != wantName {
+		panic(fmt.Sprintf(
+			"fusion: Register[%s] 表名冲突：cache 已锁定为 %q，本次传 %q。"+
+				"同类型多次注册必须用一致表名。",
+			typeQualifiedName(rt), cachedTable, wantName,
+		))
+	}
 }
 
 // Lookup 按 reflect.Type 查找已注册的 Table（返回非泛型接口）。

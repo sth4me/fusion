@@ -140,7 +140,7 @@ func DeleteByIDs[T any](t *meta.Table[T], db DB, ids map[string]any) *query.Dele
 // Raw 执行原始 SQL，扫描进 *[]T。out 必须指向已注册模型类型的切片。
 // 这是兜底机制（见设计目标：最终允许 raw 语句）。
 func Raw[T any](out *[]T, ctx context.Context, db DB, sqlStr string, args ...any) error {
-	t := meta.Register[T]("")
+	t := meta.LookupOrCreateDefault[T]()
 	start := time.Now()
 	rows, err := db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
@@ -180,7 +180,7 @@ func Exec(ctx context.Context, db DB, sqlStr string, args ...any) (sql.Result, e
 // 兼具 Exec（写）与 Raw（扫描）的能力，适合 INSERT ... RETURNING "id" 之类场景。
 // out 必须指向已注册模型类型的切片。
 func ExecReturning[T any](out *[]T, ctx context.Context, db DB, sqlStr string, args ...any) error {
-	t := meta.Register[T]("")
+	t := meta.LookupOrCreateDefault[T]()
 	start := time.Now()
 	rows, err := db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {

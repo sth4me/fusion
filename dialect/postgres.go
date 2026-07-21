@@ -25,3 +25,10 @@ func (Postgres) UpsertOnConflict(conflictCols, updateCols []string) string {
 	out += joinCSV(sets)
 	return out
 }
+
+// ExcludedRef 渲染 PG 的 EXCLUDED 别名引用。
+// excluded 是 PG 接受的特殊关系名，不需引用也不会冲突。
+func (Postgres) ExcludedRef(col string) string { return "excluded." + col }
+
+// ConflictTarget 渲染 PG 的冲突目标（已引用列名列表）。
+func (Postgres) ConflictTarget(cols []string) string { return "(" + joinCSV(cols) + ")" }

@@ -20,6 +20,18 @@ type InsertQuery struct {
 	ConflictCols []string
 	// UpdateCols 是 UPSERT 冲突时更新的列名。
 	UpdateCols []string
+	// ConflictSets 是 UPSERT 冲突时的自定义表达式 SET 列表。
+	// 与 UpdateCols 互斥：ConflictSets 非空时走自定义渲染（支持累加/算术），
+	// 否则走 UpdateCols 的默认覆盖语义（col = excluded.col）。
+	ConflictSets []UpsertSet
+}
+
+// UpsertSet 是 ON CONFLICT 自定义 SET 子句项。
+//   Col   — 要更新的列名（已引用）
+//   Value — 右值表达式（expr.UpsertValue）
+type UpsertSet struct {
+	Col   string
+	Value expr.UpsertValue
 }
 
 // BuildINSERT 生成单行 INSERT 语句。
@@ -47,7 +59,13 @@ func BuildINSERTBatch(m *meta.ModelMeta, q InsertQuery, rows [][]any, d dialect.
 
 	// UPSERT 子句
 	if q.DoUpsert {
-		sql += d.UpsertOnConflict(quoteListRaw(q.ConflictCols, d), quoteListRaw(q.UpdateCols, d))
+		if len(q.ConflictSets) > 0 {
+			// 自定义表达式路径（累加/算术等）
+			sql += renderUpsertSets(r, d, quoteListRaw(q.ConflictCols, d), q.ConflictSets)
+		} else {
+			// 默认覆盖语义（col = excluded.col）
+			sql += d.UpsertOnConflict(quoteListRaw(q.ConflictCols, d), quoteListRaw(q.UpdateCols, d))
+		}
 	}
 
 	// RETURNING（仅方言支持时）
@@ -56,6 +74,25 @@ func BuildINSERTBatch(m *meta.ModelMeta, q InsertQuery, rows [][]any, d dialect.
 	}
 
 	return sql, args
+}
+
+// renderUpsertSets 渲染自定义 SET 表达式的 UPSERT 子句。
+//   PG/SQLite: `ON CONFLICT (col1, col2) DO UPDATE SET "a" = ... + excluded."b", ...`
+//   MySQL:     `ON DUPLICATE KEY UPDATE `a` = ... + VALUES(`b`), ...`
+// Col 是裸列名，由本函数引用。渲染过程中通过 r（renderer）收集参数。
+func renderUpsertSets(r *renderer, d dialect.Dialect, conflictCols []string, sets []UpsertSet) string {
+	target := d.ConflictTarget(conflictCols)
+	setsSQL := make([]string, 0, len(sets))
+	for _, s := range sets {
+		// 裸列名引用 + 右值由 UpsertValue 渲染
+		setsSQL = append(setsSQL, d.QuoteIdent(s.Col)+" = "+s.Value.RenderUpsert(r))
+	}
+	switch d.Name() {
+	case "mysql":
+		return " ON DUPLICATE KEY UPDATE " + strings.Join(setsSQL, ", ")
+	default: // postgres / sqlite
+		return " ON CONFLICT " + target + " DO UPDATE SET " + strings.Join(setsSQL, ", ")
+	}
 }
 
 // UpdateQuery 描述 UPDATE 语句的配置。

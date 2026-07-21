@@ -13,6 +13,7 @@ type r2 struct{ n int }
 
 func (m *r2) NextPlaceholder() string { m.n++; return "?" }
 func (m *r2) AddParam(any)            {}
+func (m *r2) ExcludedRef(string) string { return "" }
 func (m *r2) QuoteCol(tc string) string {
 	out := ""
 	for i, p := range splitDots(tc) {

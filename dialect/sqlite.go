@@ -26,3 +26,9 @@ func (SQLite) UpsertOnConflict(conflictCols, updateCols []string) string {
 	out += joinCSV(sets)
 	return out
 }
+
+// ExcludedRef 渲染 SQLite 的 excluded 别名引用（语法同 PG）。
+func (SQLite) ExcludedRef(col string) string { return "excluded." + col }
+
+// ConflictTarget 渲染 SQLite 的冲突目标（语法同 PG）。
+func (SQLite) ConflictTarget(cols []string) string { return "(" + joinCSV(cols) + ")" }

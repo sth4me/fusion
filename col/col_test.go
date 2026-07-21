@@ -92,6 +92,7 @@ type miniR struct{ n int }
 
 func (m *miniR) NextPlaceholder() string { m.n++; return "?" }
 func (m *miniR) AddParam(any)            {}
+func (m *miniR) ExcludedRef(string) string { return "" }
 func (m *miniR) QuoteCol(tc string) string {
 	out := ""
 	for i, p := range splitTc(tc) {
@@ -218,11 +219,19 @@ func TestJSONTransparent(t *testing.T) {
 	}
 }
 
-// TestRegisterCached 验证重复注册返回缓存
+// TestRegisterCached 验证重复注册的语义：同 name 返回 cached；不同 name panic。
 func TestRegisterCached(t *testing.T) {
 	t1 := meta.Register[TestUser]("test_users")
-	t2 := meta.Register[TestUser]("") // 不同表名参数
+	t2 := meta.Register[TestUser]("test_users") // 同 name：返回 cached 同指针
 	if t1 != t2 {
-		t.Error("repeated Register should return cached table")
+		t.Error("repeated Register with same name should return cached table")
 	}
+
+	// 不同 name（含空 → 默认蛇形）必须 panic（fail-fast）
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Register with conflicting name should panic")
+		}
+	}()
+	meta.Register[TestUser]("") // 默认蛇形 test_user ≠ test_users
 }

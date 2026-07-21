@@ -30,6 +30,17 @@ type Dialect interface {
 	//   MySQL: ON DUPLICATE KEY UPDATE ...=VALUES(...)
 	// 返回冲突子句 SQL（不含前面的 INSERT 部分）与对应参数（多数方言无额外参数）。
 	UpsertOnConflict(conflictCols, updateCols []string) string
+
+	// ExcludedRef 引用 UPSERT 场景下"插入行中的列值"（冲突时的候选新值）。
+	//   PostgreSQL/SQLite: EXCLUDED."col"（小写关键字 excluded 是 PG/SQLite 接受的别名）
+	//   MySQL: VALUES(`col`)
+	// 供 OnConflictSet 自定义表达式（累加/算术）使用。
+	ExcludedRef(col string) string
+
+	// ConflictTarget 渲染 UPSERT 的冲突目标子句（ON CONFLICT 之后、DO 之前的部分）。
+	//   PostgreSQL/SQLite: ("col1", "col2")
+	//   MySQL: ""（ON DUPLICATE KEY 不显式指定冲突列，靠唯一键自动判定）
+	ConflictTarget(cols []string) string
 }
 
 // EscapeBytes 转义字符串字面量内的单引号（用于 raw SQL，慎用）。

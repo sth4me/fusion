@@ -56,6 +56,9 @@ func (r *renderer) QuoteCol(tableCol string) string {
 	return r.d.QuoteIdent(tableCol)
 }
 
+// ExcludedRef 实现 expr.Renderer，委托给方言渲染 UPSERT 候选值引用。
+func (r *renderer) ExcludedRef(col string) string { return r.d.ExcludedRef(r.d.QuoteIdent(col)) }
+
 // Args 返回已收集的参数。
 func (r *renderer) Args() []any { return r.args }
 
