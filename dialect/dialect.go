@@ -37,6 +37,13 @@ type Dialect interface {
 	// 供 OnConflictSet 自定义表达式（累加/算术）使用。
 	ExcludedRef(col string) string
 
+	// UpsertDoNothing 渲染 UPSERT 的"冲突即忽略"子句（INSERT ... ON CONFLICT DO NOTHING）。
+	// conflictCols 为冲突目标列名（已引用）。
+	//   PostgreSQL/SQLite: ON CONFLICT (...) DO NOTHING
+	//   MySQL: 不支持（无 DO NOTHING；INSERT IGNORE 语义不等价——忽略所有错误非仅唯一键冲突），
+	//           返回空串。调用方应检测空串并报错（见 query 包 DoNothing 的校验）。
+	UpsertDoNothing(conflictCols []string) string
+
 	// ConflictTarget 渲染 UPSERT 的冲突目标子句（ON CONFLICT 之后、DO 之前的部分）。
 	//   PostgreSQL/SQLite: ("col1", "col2")
 	//   MySQL: ""（ON DUPLICATE KEY 不显式指定冲突列，靠唯一键自动判定）

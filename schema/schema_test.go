@@ -229,3 +229,4 @@ func (unknownDialect) SupportsReturning() bool                     { return fals
 func (unknownDialect) UpsertOnConflict(_, _ []string) string       { return "" }
 func (unknownDialect) ExcludedRef(string) string                   { return "" }
 func (unknownDialect) ConflictTarget([]string) string              { return "" }
+func (unknownDialect) UpsertDoNothing([]string) string             { return "" }

@@ -96,6 +96,62 @@ func TestPG_BasicCRUD(t *testing.T) {
 	}
 }
 
+// TestPG_OnConflictDoNothing 验证 PG 的 DO NOTHING 幂等语义：
+// 唯一键冲突时第二次插入静默成功（不报错、不覆盖），主键不回填（保持零值）。
+func TestPG_OnConflictDoNothing(t *testing.T) {
+	db, cleanup := pgDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS pg_users`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE pg_users (id SERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	fusion.SetDefaultDialect(dialect.PostgresDialect)
+	wrapped := fusion.WrapDB(db)
+	Users := fusion.Register[PGUser]("pg_users")
+
+	// 第一次插入：成功，主键回填
+	u1 := &PGUser{}
+	u1.Name.Set("dave")
+	u1.Email.Set(strPtr("dave@e.com"))
+	if err := fusion.Insert(Users, wrapped, u1).
+		OnConflictDoNothing([]string{"name"}).
+		Exec(ctx); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if u1.ID.Get() == 0 {
+		t.Error("first insert should backfill id via RETURNING")
+	}
+
+	// 第二次插入同 name：静默跳过，不报错、不覆盖、主键保持零值
+	u2 := &PGUser{}
+	u2.Name.Set("dave")
+	u2.Email.Set(strPtr("hacker@e.com"))
+	if err := fusion.Insert(Users, wrapped, u2).
+		OnConflictDoNothing([]string{"name"}).
+		Exec(ctx); err != nil {
+		t.Fatalf("second insert should be ignored, got: %v", err)
+	}
+	if u2.ID.Get() != 0 {
+		t.Errorf("conflicted insert id should stay zero, got %d", u2.ID.Get())
+	}
+
+	// 全表应只有 1 行，且是第一次插入的数据
+	all, err := fusion.From(Users, wrapped).All(ctx)
+	if err != nil {
+		t.Fatalf("query all: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("got %d rows, want 1", len(all))
+	}
+	if all[0].Name.Get() != "dave" || all[0].Email.Get() == nil || *all[0].Email.Get() != "dave@e.com" {
+		t.Errorf("original row should be preserved, got %+v", all[0])
+	}
+}
+
 // TestPG_LoadSchemaBind 内省 + Bind 校验。
 func TestPG_LoadSchemaBind(t *testing.T) {
 	db, cleanup := pgDB(t)

@@ -32,3 +32,8 @@ func (Postgres) ExcludedRef(col string) string { return "excluded." + col }
 
 // ConflictTarget 渲染 PG 的冲突目标（已引用列名列表）。
 func (Postgres) ConflictTarget(cols []string) string { return "(" + joinCSV(cols) + ")" }
+
+// UpsertDoNothing 渲染 PG 的"冲突即忽略"子句。
+func (Postgres) UpsertDoNothing(conflictCols []string) string {
+	return " ON CONFLICT (" + joinCSV(conflictCols) + ") DO NOTHING"
+}

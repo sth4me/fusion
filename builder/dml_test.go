@@ -62,6 +62,36 @@ func TestBuildINSERTUpsert(t *testing.T) {
 	}
 }
 
+// TestBuildINSERTUpsertDoNothing 验证 DO NOTHING 子句渲染（PG/SQLite）。
+func TestBuildINSERTUpsertDoNothing(t *testing.T) {
+	m := dmlMeta()
+	q := InsertQuery{
+		Cols:         []string{"id", "name", "age"},
+		DoUpsert:     true,
+		DoNothing:    true,
+		ConflictCols: []string{"id"},
+	}
+	pgSQL, _ := BuildINSERT(m, q, []any{1, "alice", 30}, dialect.PostgresDialect)
+	pgWant := `INSERT INTO "users" ("id", "name", "age") VALUES ($1, $2, $3) ON CONFLICT ("id") DO NOTHING`
+	if pgSQL != pgWant {
+		t.Errorf("pg got %q, want %q", pgSQL, pgWant)
+	}
+
+	sqliteSQL, _ := BuildINSERT(m, q, []any{1, "alice", 30}, dialect.SQLiteDialect)
+	sqliteWant := `INSERT INTO "users" ("id", "name", "age") VALUES (?, ?, ?) ON CONFLICT ("id") DO NOTHING`
+	if sqliteSQL != sqliteWant {
+		t.Errorf("sqlite got %q, want %q", sqliteSQL, sqliteWant)
+	}
+
+	// MySQL 无 DO NOTHING：渲染结果为不带冲突子句的普通 INSERT
+	// （query 层在 Exec/SQL 时校验方言并报错，此处只验证 builder 不 panic）
+	mysqlSQL, _ := BuildINSERT(m, q, []any{1, "alice", 30}, dialect.MySQLDialect)
+	mysqlWant := "INSERT INTO `users` (`id`, `name`, `age`) VALUES (?, ?, ?)"
+	if mysqlSQL != mysqlWant {
+		t.Errorf("mysql got %q, want %q", mysqlSQL, mysqlWant)
+	}
+}
+
 // TestBuildINSERTUpsertSet 验证 OnConflictSet 自定义表达式渲染（累加场景）。
 func TestBuildINSERTUpsertSet(t *testing.T) {
 	m := dmlMeta()

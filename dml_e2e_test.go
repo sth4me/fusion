@@ -3,6 +3,7 @@ package fusion_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/sth4me/fusion"
@@ -155,4 +156,80 @@ func TestDML_UpdateAllFields(t *testing.T) {
 		t.Fatalf("update all: %v", err)
 	}
 	// 应不报错且数据保持（因为值没变）
+}
+
+// TestDML_OnConflictDoNothing 验证"冲突即忽略"的幂等写入语义。
+// 预置唯一键冲突：同一 name 第二次插入不报错、不覆盖原数据。
+func TestDML_OnConflictDoNothing(t *testing.T) {
+	db := openSQLite(t)
+	defer db.Close()
+	// 用独立表：name 加 UNIQUE 约束制造冲突
+	mustExecP(db, "DROP TABLE IF EXISTS users")
+	mustExecP(db, `CREATE TABLE users (
+		id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL UNIQUE,
+		age INTEGER NOT NULL,
+		email TEXT
+	)`)
+
+	fusion.SetDefaultDialect(dialect.SQLiteDialect)
+	Users := fusion.Register[DMLUser]("users")
+
+	// 第一次插入：成功
+	u1 := &DMLUser{}
+	u1.Name.Set("dave")
+	u1.Age.Set(40)
+	u1.Email.Set(strPtr("dave@e.com"))
+	if err := fusion.Insert(Users, db, u1).
+		OnConflictDoNothing([]string{"name"}).
+		Exec(context.Background()); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	// 第二次插入同 name：不报错（DO NOTHING），不覆盖
+	u2 := &DMLUser{}
+	u2.Name.Set("dave")
+	u2.Age.Set(99) // 与已存在行不同，若被覆盖则说明 DO NOTHING 失效
+	u2.Email.Set(strPtr("hacker@e.com"))
+	if err := fusion.Insert(Users, db, u2).
+		OnConflictDoNothing([]string{"name"}).
+		Exec(context.Background()); err != nil {
+		t.Fatalf("second insert should be ignored, got: %v", err)
+	}
+
+	// 全表应只有 1 行，且是第一次插入的数据
+	all, err := fusion.From(Users, db).All(context.Background())
+	if err != nil {
+		t.Fatalf("query all: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("got %d rows, want 1", len(all))
+	}
+	if all[0].Name.Get() != "dave" || all[0].Age.Get() != 40 {
+		t.Errorf("original row should be preserved, got %+v", all[0])
+	}
+	if all[0].Email.Get() == nil || *all[0].Email.Get() != "dave@e.com" {
+		t.Errorf("email should stay original, got %v", all[0].Email.Get())
+	}
+}
+
+// TestDML_OnConflictDoNothing_MySQL 验证 MySQL 方言下 Exec 报不支持错误。
+func TestDML_OnConflictDoNothing_MySQL(t *testing.T) {
+	db := openSQLite(t) // 物理上是 SQLite，但方言设为 MySQL 触发校验
+	defer db.Close()
+	fusion.SetDefaultDialect(dialect.MySQLDialect)
+	Users := fusion.Register[DMLUser]("users")
+
+	u := &DMLUser{}
+	u.Name.Set("x")
+	u.Age.Set(1)
+	err := fusion.Insert(Users, db, u).
+		OnConflictDoNothing([]string{"name"}).
+		Exec(context.Background())
+	if err == nil {
+		t.Fatal("MySQL + DoNothing should return error")
+	}
+	if !strings.Contains(err.Error(), "不支持") {
+		t.Errorf("error should mention MySQL unsupported, got: %v", err)
+	}
 }

@@ -32,3 +32,8 @@ func (SQLite) ExcludedRef(col string) string { return "excluded." + col }
 
 // ConflictTarget 渲染 SQLite 的冲突目标（语法同 PG）。
 func (SQLite) ConflictTarget(cols []string) string { return "(" + joinCSV(cols) + ")" }
+
+// UpsertDoNothing 渲染 SQLite 的"冲突即忽略"子句（语法同 PG）。
+func (SQLite) UpsertDoNothing(conflictCols []string) string {
+	return " ON CONFLICT (" + joinCSV(conflictCols) + ") DO NOTHING"
+}

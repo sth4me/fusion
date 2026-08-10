@@ -50,3 +50,8 @@ func (*MySQL) ExcludedRef(col string) string { return "VALUES(" + col + ")" }
 
 // ConflictTarget MySQL 不显式指定冲突列（ON DUPLICATE KEY 自动判定），返回空串。
 func (*MySQL) ConflictTarget(_ []string) string { return "" }
+
+// UpsertDoNothing MySQL 不支持"冲突即忽略"（无 DO NOTHING 语法）。
+// INSERT IGNORE 语义不等价（忽略所有错误而非仅唯一键冲突），不做近似实现。
+// 返回空串，调用方（query.DoNothing）检测后报错，指导用户用 Raw 兜底。
+func (*MySQL) UpsertDoNothing(_ []string) string { return "" }

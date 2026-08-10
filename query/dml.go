@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -40,6 +41,9 @@ type Inserter[T any] struct {
 	updateFields   []string
 	// conflictSets 自定义 SET 表达式（非空时覆盖 updateFields 的覆盖语义）。
 	conflictSets []builder.UpsertSet
+	// doNothing 为 true 时渲染"冲突即忽略"（ON CONFLICT ... DO NOTHING）。
+	// 与 updateFields/conflictSets 互斥（DO NOTHING 无 SET 子句）。
+	doNothing bool
 }
 
 // NewInsert 构造单条 Inserter。
@@ -65,7 +69,25 @@ func (i *Inserter[T]) OnConflict(conflictCols, updateCols []string) *Inserter[T]
 	i.doUpsert = true
 	i.conflictFields = conflictCols
 	i.updateFields = updateCols
-	i.conflictSets = nil // 互斥：OnConflict 覆盖 OnConflictSet
+	i.conflictSets = nil   // 互斥：OnConflict 覆盖 OnConflictSet
+	i.doNothing = false    // 互斥：OnConflict 覆盖 DoNothing
+	return i
+}
+
+// OnConflictDoNothing 配置 UPSERT 的"冲突即忽略"（INSERT ... ON CONFLICT (...) DO NOTHING）。
+// 存在冲突时静默跳过，不报错、不覆盖。语义：幂等写入（重复请求/并发初始化不重复创建）。
+// 与 OnConflict/OnConflictSet 互斥：后调的覆盖前者。
+//
+// MySQL 不支持 DO NOTHING（无对应语法；INSERT IGNORE 忽略所有错误而非仅唯一键冲突，
+// 语义不等价）。MySQL 下调用返回 error：Exec 时校验方言后报错，需要时用 Raw 兜底。
+//
+// 用法：fusion.EInsert(engine, Roles, &r).OnConflictDoNothing([]string{"role_code"}).Exec(ctx)
+func (i *Inserter[T]) OnConflictDoNothing(conflictCols []string) *Inserter[T] {
+	i.doUpsert = true
+	i.conflictFields = conflictCols
+	i.updateFields = nil // 互斥：DO NOTHING 无 SET
+	i.conflictSets = nil // 互斥
+	i.doNothing = true
 	return i
 }
 
@@ -89,6 +111,7 @@ func (i *Inserter[T]) OnConflictSet(conflictCols []string, sets []builder.Upsert
 	i.conflictFields = conflictCols
 	i.updateFields = nil // 互斥
 	i.conflictSets = sets
+	i.doNothing = false // 互斥：OnConflictSet 覆盖 DoNothing
 	return i
 }
 
@@ -201,16 +224,34 @@ func (i *Inserter[T]) execBatchLastInsertID(ctx context.Context, sqlStr string, 
 
 // Exec 执行 INSERT（单条或批量，取决于 target/targets）。
 func (i *Inserter[T]) Exec(ctx context.Context) error {
+	if err := i.validateUpsert(); err != nil {
+		return err
+	}
 	if len(i.targets) > 0 {
 		return i.execBatch(ctx)
 	}
 	return i.execSingle(ctx)
 }
 
+// validateUpsert 校验 Upsert 配置与方言的兼容性。
+// 当前仅一条规则：DoNothing 在 MySQL 下不支持（无 DO NOTHING 语法；
+// INSERT IGNORE 忽略所有错误而非仅唯一键冲突，语义不等价，不做近似实现）。
+func (i *Inserter[T]) validateUpsert() error {
+	if i.doNothing && i.d.Name() == "mysql" {
+		return fmt.Errorf("fusion: OnConflictDoNothing 不支持 MySQL（无 DO NOTHING 语法；" +
+			"INSERT IGNORE 忽略所有错误而非仅唯一键冲突，语义不等价）。" +
+			"需要幂等插入请用 fusion.Raw 写 INSERT IGNORE，或先查再插")
+	}
+	return nil
+}
+
 // SQL 渲染最终 SQL 与参数，不执行。供调试日志、单元测试或自定义执行路径用。
 // 单条场景：渲染单行 INSERT；批量场景：渲染多行批 INSERT。
 // 不触发 BeforeCreate 钩子（钩子在 Exec 路径触发）。
 func (i *Inserter[T]) SQL() (string, []any, error) {
+	if err := i.validateUpsert(); err != nil {
+		return "", nil, err
+	}
 	if len(i.targets) > 0 {
 		cols := i.unionBatchCols()
 		rows := make([][]any, 0, len(i.targets))
@@ -224,6 +265,7 @@ func (i *Inserter[T]) SQL() (string, []any, error) {
 			ConflictCols:  i.conflictFields,
 			UpdateCols:    i.updateFields,
 			ConflictSets:  i.conflictSets,
+			DoNothing:     i.doNothing,
 		}
 		sqlStr, args := builder.BuildINSERTBatch(i.table.Meta, q, rows, i.d)
 		return sqlStr, args, nil
@@ -242,6 +284,7 @@ func (i *Inserter[T]) SQL() (string, []any, error) {
 		ConflictCols:  i.conflictFields,
 		UpdateCols:    i.updateFields,
 		ConflictSets:  i.conflictSets,
+			DoNothing:     i.doNothing,
 	}
 	sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
 	return sqlStr, args, nil
@@ -267,6 +310,7 @@ func (i *Inserter[T]) execSingle(ctx context.Context) error {
 		ConflictCols:  i.conflictFields,
 		UpdateCols:    i.updateFields,
 		ConflictSets:  i.conflictSets,
+			DoNothing:     i.doNothing,
 	}
 	sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
 
@@ -323,6 +367,7 @@ func (i *Inserter[T]) execBatch(ctx context.Context) error {
 		ConflictCols:  i.conflictFields,
 		UpdateCols:    i.updateFields,
 		ConflictSets:  i.conflictSets,
+		DoNothing:     i.doNothing,
 	}
 	sqlStr, args := builder.BuildINSERTBatch(i.table.Meta, q, rows, i.d)
 
@@ -407,6 +452,8 @@ func (i *Inserter[T]) returningCols() []string {
 
 // execWithReturning 执行 INSERT ... RETURNING 并回填主键。
 // 返回受影响行数（RETURNING 路径固定为 1）。
+// DoNothing 模式下冲突被忽略时无返回行（sql.ErrNoRows）：不算错误，
+// 主键不回填（本来就没有新行），返回 0 行。
 func (i *Inserter[T]) execWithReturning(ctx context.Context, sqlStr string, args []any, retCols []string) (int64, error) {
 	row := i.execer.QueryRowContext(ctx, sqlStr, args...)
 	if row == nil {
@@ -415,6 +462,10 @@ func (i *Inserter[T]) execWithReturning(ctx context.Context, sqlStr string, args
 	// 扫描 RETURNING 值回填到 target 的对应字段
 	dest := i.scanDestForCols(retCols)
 	if err := row.Scan(dest...); err != nil {
+		if i.doNothing && errors.Is(err, sql.ErrNoRows) {
+			// DO NOTHING 冲突跳过：无返回行是预期行为，不算错误
+			return 0, nil
+		}
 		return 0, fmt.Errorf("fusion: insert returning: %w (sql=%s)", err, sqlStr)
 	}
 	return 1, nil
@@ -428,6 +479,10 @@ func (i *Inserter[T]) execWithLastInsertID(ctx context.Context, sqlStr string, a
 		return 0, fmt.Errorf("fusion: insert: %w (sql=%s)", err, sqlStr)
 	}
 	rows, _ := res.RowsAffected()
+	// DoNothing 冲突跳过：RowsAffected==0，无新行，主键不回填（保持零值）
+	if i.doNothing && rows == 0 {
+		return 0, nil
+	}
 	if len(retCols) == 0 {
 		return rows, nil
 	}

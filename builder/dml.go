@@ -24,6 +24,9 @@ type InsertQuery struct {
 	// 与 UpdateCols 互斥：ConflictSets 非空时走自定义渲染（支持累加/算术），
 	// 否则走 UpdateCols 的默认覆盖语义（col = excluded.col）。
 	ConflictSets []UpsertSet
+	// DoNothing 为 true 时渲染"冲突即忽略"（ON CONFLICT ... DO NOTHING）。
+	// 与 ConflictSets/UpdateCols 互斥（DO NOTHING 无 SET 子句）。
+	DoNothing bool
 }
 
 // UpsertSet 是 ON CONFLICT 自定义 SET 子句项。
@@ -59,7 +62,11 @@ func BuildINSERTBatch(m *meta.ModelMeta, q InsertQuery, rows [][]any, d dialect.
 
 	// UPSERT 子句
 	if q.DoUpsert {
-		if len(q.ConflictSets) > 0 {
+		if q.DoNothing {
+			// 冲突即忽略（ON CONFLICT ... DO NOTHING）。方言不支持时返回空串，
+			// 由调用方（query.DoNothing）预先校验，此处不重复报错。
+			sql += d.UpsertDoNothing(quoteListRaw(q.ConflictCols, d))
+		} else if len(q.ConflictSets) > 0 {
 			// 自定义表达式路径（累加/算术等）
 			sql += renderUpsertSets(r, d, quoteListRaw(q.ConflictCols, d), q.ConflictSets)
 		} else {
