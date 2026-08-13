@@ -233,3 +233,40 @@ func TestDML_OnConflictDoNothing_MySQL(t *testing.T) {
 		t.Errorf("error should mention MySQL unsupported, got: %v", err)
 	}
 }
+
+// TestDML_UpdateExpectAffected 乐观锁行数校验：ExpectAffected(1) 时
+// 版本冲突（rows=0）必须报错，不能静默成功；正常更新通过。
+func TestDML_UpdateExpectAffected(t *testing.T) {
+	db := openSQLiteForDML(t)
+	defer db.Close()
+	execInsert(db, "INSERT INTO users (id,name,age,email) VALUES (1,'eve',25,'e@e.com')")
+	fusion.SetDefaultDialect(dialect.SQLiteDialect)
+	Users := fusion.Register[DMLUser]("users")
+
+	// 正常更新：恰好 1 行 → 通过
+	got, _ := fusion.From(Users, db).Where(Users.Proto.ID.Eq(1)).One(context.Background())
+	got.Age.Set(26)
+	if err := fusion.Update(Users, db, &got).
+		Where(Users.Proto.ID.Eq(1)).ExpectAffected(1).
+		Exec(context.Background()); err != nil {
+		t.Fatalf("正常更新 ExpectAffected(1) 应通过: %v", err)
+	}
+
+	// 版本冲突模拟：WHERE 不匹配（模拟 version=旧值）→ rows=0 → 必须报错
+	got2, _ := fusion.From(Users, db).Where(Users.Proto.ID.Eq(1)).One(context.Background())
+	got2.Age.Set(27)
+	err := fusion.Update(Users, db, &got2).
+		Where(Users.Proto.ID.Eq(1).And(Users.Proto.Age.Eq(999))). // 无匹配行
+		ExpectAffected(1).
+		Exec(context.Background())
+	if err == nil {
+		t.Fatal("ExpectAffected(1) 且 rows=0 应报错（乐观锁冲突不得静默）")
+	}
+
+	// 不设 ExpectAffected：rows=0 仍静默（默认兼容，不影响存量调用）
+	if err := fusion.Update(Users, db, &got2).
+		Where(Users.Proto.ID.Eq(1).And(Users.Proto.Age.Eq(999))).
+		Exec(context.Background()); err != nil {
+		t.Fatalf("默认（不校验）rows=0 应静默: %v", err)
+	}
+}

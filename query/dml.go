@@ -543,6 +543,10 @@ type Updater[T any] struct {
 	target *T
 	where  expr.Expr
 	all    bool // 强制全字段更新（即使未 Set）
+
+	// expectAffected >0 时校验受影响行数必须等于该值（乐观锁用：WHERE version=? 冲突时
+	// rows=0，默认静默成功会掩盖并发冲突；设 1 则 rows≠1 报错）。0=不校验（默认兼容）。
+	expectAffected int
 }
 
 // NewUpdate 构造 Updater。
@@ -559,6 +563,14 @@ func (u *Updater[T]) Where(e expr.Expr) *Updater[T] {
 // AllFields 强制更新所有字段（忽略 set 标志，见 #3 全量更新 opt）。
 func (u *Updater[T]) AllFields() *Updater[T] {
 	u.all = true
+	return u
+}
+
+// ExpectAffected 要求本次 UPDATE 恰好影响 n 行，否则返回错误。
+// 典型用途：乐观锁更新（WHERE version=?）设 n=1——并发冲突时 rows=0，
+// 不校验会静默"成功"导致重复确认/超卖等资金库存问题。
+func (u *Updater[T]) ExpectAffected(n int) *Updater[T] {
+	u.expectAffected = n
 	return u
 }
 
@@ -648,6 +660,10 @@ func (u *Updater[T]) Exec(ctx context.Context) error {
 	logging.LogQuery(ctx, logging.QueryInfo{Op: "UPDATE", SQL: sqlStr, Args: args, Duration: time.Since(start), RowsAffected: rowsAffected, Err: err})
 	if err != nil {
 		return fmt.Errorf("fusion: update: %w (sql=%s)", err, sqlStr)
+	}
+	// ExpectAffected 校验：受影响行数不符 = 并发冲突（乐观锁 version 被别的事务改动）
+	if u.expectAffected > 0 && rowsAffected != int64(u.expectAffected) {
+		return fmt.Errorf("fusion: update affected %d rows, expected %d (sql=%s)——记录可能已被其他操作修改（乐观锁冲突）", rowsAffected, u.expectAffected, sqlStr)
 	}
 
 	// AfterUpdate 钩子
