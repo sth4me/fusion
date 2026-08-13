@@ -544,11 +544,15 @@ type Updater[T any] struct {
 	where  expr.Expr
 	all    bool // 强制全字段更新（即使未 Set）
 
-	// expectAffected >0 时校验受影响行数必须等于该值（乐观锁用：WHERE version=? 冲突时
+	
+// expectAffected >0 时校验受影响行数必须等于该值（乐观锁用：WHERE version=? 冲突时
 	// rows=0，默认静默成功会掩盖并发冲突；设 1 则 rows≠1 报错）。0=不校验（默认兼容）。
 	expectAffected int
 }
 
+// ErrExpectAffectedMismatch 期望受影响行数不符（乐观锁冲突，见 Updater.ExpectAffected）。
+// 调用方可用 errors.Is 识别并发冲突，映射为业务错误（如 409/400）。
+var ErrExpectAffectedMismatch = errors.New("fusion: affected rows mismatch (optimistic lock conflict)")
 // NewUpdate 构造 Updater。
 func NewUpdate[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer, target *T) *Updater[T] {
 	return &Updater[T]{table: t, d: d, execer: execer, target: target}
@@ -663,7 +667,7 @@ func (u *Updater[T]) Exec(ctx context.Context) error {
 	}
 	// ExpectAffected 校验：受影响行数不符 = 并发冲突（乐观锁 version 被别的事务改动）
 	if u.expectAffected > 0 && rowsAffected != int64(u.expectAffected) {
-		return fmt.Errorf("fusion: update affected %d rows, expected %d (sql=%s)——记录可能已被其他操作修改（乐观锁冲突）", rowsAffected, u.expectAffected, sqlStr)
+		return fmt.Errorf("%w: affected %d, expected %d (sql=%s)", ErrExpectAffectedMismatch, rowsAffected, u.expectAffected, sqlStr)
 	}
 
 	// AfterUpdate 钩子

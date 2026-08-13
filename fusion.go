@@ -26,6 +26,9 @@ import (
 	"github.com/sth4me/fusion/tx"
 )
 
+// ErrExpectAffectedMismatch 期望受影响行数不符（乐观锁冲突，见 Updater.ExpectAffected）。
+// re-export query 包哨兵：调用方 errors.Is(err, fusion.ErrExpectAffectedMismatch) 识别。
+var ErrExpectAffectedMismatch = query.ErrExpectAffectedMismatch
 // 默认方言（全局）。可由 SetDefaultDialect 修改；读写在 defaultDialectMu 下，
 // 消除原无锁访问的 data race。
 var (
