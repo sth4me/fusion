@@ -195,6 +195,26 @@ func TestOnePreservesJoinAliasLock(t *testing.T) {
 	}
 }
 
+// TestQueryChainedWhere 验证多次 Where 调用按 AND 叠加（回归：曾为"覆盖"语义，
+// 链式 Where 会静默丢条件——shop 挂单列表因此返回非 held 挂单）。
+func TestQueryChainedWhere(t *testing.T) {
+	tab := regQModel()
+	fe := &fakeExecer{queryErr: errors.New("stop")}
+	u := tab.Proto
+	_, _ = New[qModel](tab, dialect.PostgresDialect, fe).
+		Where(u.Name.Eq("alice")).
+		Where(u.Age.Gt(18)).
+		All(context.Background())
+
+	wantContains := `WHERE "name" = $1 AND "age" > $2`
+	if !strings.Contains(fe.lastSQL, wantContains) {
+		t.Errorf("SQL got %q, want contains %q", fe.lastSQL, wantContains)
+	}
+	if len(fe.lastArgs) != 2 || fe.lastArgs[0] != "alice" || fe.lastArgs[1] != 18 {
+		t.Errorf("args got %v, want [alice 18]", fe.lastArgs)
+	}
+}
+
 // TestCountPreservesJoin 验证 Count() 保留 Join/Where（回归带 JOIN 的 Count 列引用错误）。
 func TestCountPreservesJoin(t *testing.T) {
 	tab := regQModel()

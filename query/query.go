@@ -65,9 +65,10 @@ func New[T any](table *meta.Table[T], d dialect.Dialect, execer queryExecer) *Qu
 	return &Query[T]{table: table, d: d, execer: execer}
 }
 
-// Where 设置 WHERE 条件（仅接受 Expr，见决策2）。多次调用覆盖。
+// Where 追加 WHERE 条件（仅接受 Expr，见决策2）。多次调用按 AND 叠加
+// （等价于 Where(c1.And(c2))）；布尔逻辑仍由表达式构建器负责。
 func (q *Query[T]) Where(e expr.Expr) *Query[T] {
-	q.where = e
+	q.where = q.where.And(e)
 	return q
 }
 

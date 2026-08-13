@@ -558,9 +558,9 @@ func NewUpdate[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer, t
 	return &Updater[T]{table: t, d: d, execer: execer, target: target}
 }
 
-// Where 设置更新条件。
+// Where 追加更新条件。多次调用按 AND 叠加（与 Query.Where 语义一致）。
 func (u *Updater[T]) Where(e expr.Expr) *Updater[T] {
-	u.where = e
+	u.where = u.where.And(e)
 	return u
 }
 
@@ -734,9 +734,9 @@ func NewDeleteByID[T any](t *meta.Table[T], d dialect.Dialect, execer queryExece
 	return &Deleter[T]{table: t, d: d, execer: execer, where: where}
 }
 
-// Where 设置删除条件。
+// Where 追加删除条件。多次调用按 AND 叠加（与 Query.Where 语义一致）。
 func (d *Deleter[T]) Where(e expr.Expr) *Deleter[T] {
-	d.where = e
+	d.where = d.where.And(e)
 	return d
 }
 
