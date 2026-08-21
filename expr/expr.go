@@ -269,8 +269,8 @@ func LeafColCol(leftCol, op, rightCol string) Expr {
 }
 
 type leafNode struct {
-	s     leafSpec
-	colCol bool // 列对列比较（无占位符）
+	s        leafSpec
+	colCol   bool // 列对列比较（无占位符）
 	rightCol string
 }
 
@@ -421,8 +421,8 @@ func rewritePlaceholders(subSQL string, args []any, d Renderer) string {
 // 用于占位符扫描器（rewritePlaceholders / rewritePlaceholdersInto /
 // mapPlaceholdersToColumns）跳过字面量/注释内部的 ? 或 $N，避免误判。
 //
-// SQL 标准字符串字面量用单引号，转义为 ''（双单引号）；不支持反斜杠转义
-// （MySQL 默认开启 NO_BACKSLASH_ESCAPES 之外的行为，但标准 SQL 用 ''）。
+// SQL 标准字符串字面量用单引号，转义为 ”（双单引号）；不支持反斜杠转义
+// （MySQL 默认开启 NO_BACKSLASH_ESCAPES 之外的行为，但标准 SQL 用 ”）。
 func SkipNonCode(sql string, i int) int {
 	if i >= len(sql) {
 		return i

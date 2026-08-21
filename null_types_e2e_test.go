@@ -13,13 +13,13 @@ import (
 
 // NullProbe 覆盖各类可空字段类型（核心机制：set 标志 + 指针 nil = NULL）。
 type NullProbe struct {
-	ID      col.Col[int64]
-	I       col.Col[*int64]     // 可空 int
-	F       col.Col[*float64]   // 可空 float
-	B       col.Col[*bool]      // 可空 bool
-	S       col.Col[*string]    // 可空 string（已测，对照组）
-	T       col.Col[*time.Time] // 可空 time
-	PlainI  col.Col[int64]      // 非指针 int（NOT NULL 列；不测 NULL）
+	ID     col.Col[int64]
+	I      col.Col[*int64]     // 可空 int
+	F      col.Col[*float64]   // 可空 float
+	B      col.Col[*bool]      // 可空 bool
+	S      col.Col[*string]    // 可空 string（已测，对照组）
+	T      col.Col[*time.Time] // 可空 time
+	PlainI col.Col[int64]      // 非指针 int（NOT NULL 列；不测 NULL）
 }
 
 func setupNullTypesDB(t *testing.T) (fusion.DB, *sql.DB) {

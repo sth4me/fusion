@@ -132,20 +132,20 @@ func lookupColumn(ownerType reflect.Type, fieldName string) string {
 
 // RelMeta 描述一个关联关系。Preload 时据此执行查询与回填。
 type RelMeta struct {
-	Kind       Kind
-	ParentType reflect.Type // 父模型元素类型（如 User）
-	ChildType  reflect.Type // 子模型元素类型（如 Post）
-	FieldIndex int          // 关联字段（Rel/RelMany）在父结构体内的索引
-	FieldIsRelMany bool     // true=RelMany（has_many/m2m）
+	Kind           Kind
+	ParentType     reflect.Type // 父模型元素类型（如 User）
+	ChildType      reflect.Type // 子模型元素类型（如 Post）
+	FieldIndex     int          // 关联字段（Rel/RelMany）在父结构体内的索引
+	FieldIsRelMany bool         // true=RelMany（has_many/m2m）
 
 	// 外键：belongs_to 时 FK 在父表（FKOwner=ParentType）；has_* 时在子表（FKOwner=ChildType）
-	FKIsOnChild bool          // 外键是否在子表（has_one/has_many=true，belongs_to=false）
-	FKOwner     reflect.Type  // 外键所在结构体类型
-	FKCol       string        // 外键列名
-	FKIndex     int           // 外键字段在 FKOwner 结构体内的索引
-	RefOwner    reflect.Type  // 引用键所在结构体类型
-	RefCol      string        // 引用键列名
-	RefIndex    int           // 引用键字段在 RefOwner 结构体内的索引
+	FKIsOnChild bool         // 外键是否在子表（has_one/has_many=true，belongs_to=false）
+	FKOwner     reflect.Type // 外键所在结构体类型
+	FKCol       string       // 外键列名
+	FKIndex     int          // 外键字段在 FKOwner 结构体内的索引
+	RefOwner    reflect.Type // 引用键所在结构体类型
+	RefCol      string       // 引用键列名
+	RefIndex    int          // 引用键字段在 RefOwner 结构体内的索引
 
 	// m2m 额外
 	JoinMeta *JoinMeta

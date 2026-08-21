@@ -282,7 +282,8 @@ func TestE2E_ExecReturning(t *testing.T) {
 }
 
 // TestE2E_UpsertOnConflictSet 验证 Inserter.OnConflictSet 端到端：Exec 路径完整执行 + 累加生效。
-//   场景：alice 已存在 age=30，再 Insert 同 id age=10 → 冲突时 age = age + excluded.age = 40
+//
+//	场景：alice 已存在 age=30，再 Insert 同 id age=10 → 冲突时 age = age + excluded.age = 40
 func TestE2E_UpsertOnConflictSet(t *testing.T) {
 	db := openSQLite(t)
 	defer db.Close()

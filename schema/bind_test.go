@@ -137,8 +137,8 @@ func (c *testCol) SetMeta(m meta.FieldMeta) {
 	c.tableN = m.Table
 	c.isPK = m.IsPrimaryKey
 }
-func (c testCol) ColName() string      { return c.colName }
-func (c testCol) IsSet() bool           { return false }
+func (c testCol) ColName() string        { return c.colName }
+func (c testCol) IsSet() bool            { return false }
 func (c testCol) SQLValue() (any, error) { return nil, nil }
 
 type bindUser struct {

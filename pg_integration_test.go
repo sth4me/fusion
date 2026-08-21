@@ -3,8 +3,9 @@
 // 本文件验证 PostgreSQL 专属行为（默认 go test 不包含；需 go test -tags postgres）。
 //
 // 运行前提：本地或 CI 有可用的 PostgreSQL，并通过环境变量 TEST_PG_DSN 提供 DSN，如：
-//   TEST_PG_DSN="host=localhost port=5432 user=postgres password=secret dbname=test sslmode=disable" \
-//     go test -tags postgres ./...
+//
+//	TEST_PG_DSN="host=localhost port=5432 user=postgres password=secret dbname=test sslmode=disable" \
+//	  go test -tags postgres ./...
 //
 // 未设 TEST_PG_DSN 时所有用例 t.Skip。
 //
@@ -44,11 +45,11 @@ func pgDB(t *testing.T) (*sql.DB, func()) {
 	return db, func() {
 		// 清理：drop 测试表
 		for _, t := range []string{
-				"pg_users", "pg_posts",
-				"pg_emps", "pg_comments", "pg_union_a", "pg_union_b",
-				"pg_json_items", "pg_user_roles", "pg_uuid_items", "pg_numeric_items",
-				"pg_jsonb_raw",
-			} {
+			"pg_users", "pg_posts",
+			"pg_emps", "pg_comments", "pg_union_a", "pg_union_b",
+			"pg_json_items", "pg_user_roles", "pg_uuid_items", "pg_numeric_items",
+			"pg_jsonb_raw",
+		} {
 			db.Exec("DROP TABLE IF EXISTS " + t + " CASCADE")
 		}
 		db.Close()
@@ -205,9 +206,12 @@ func TestPG_EqDistinct(t *testing.T) {
 	Users := fusion.Register[PGUser]("pg_users")
 
 	// 插入两行：email NULL 和 email 'a@e'
-	u1 := &PGUser{}; u1.Name.Set("null-email")
+	u1 := &PGUser{}
+	u1.Name.Set("null-email")
 	fusion.Insert(Users, wrapped, u1).Exec(ctx)
-	u2 := &PGUser{}; u2.Name.Set("with-email"); u2.Email.Set(strPtr("a@e.com"))
+	u2 := &PGUser{}
+	u2.Name.Set("with-email")
+	u2.Email.Set(strPtr("a@e.com"))
 	fusion.Insert(Users, wrapped, u2).Exec(ctx)
 
 	// EqDistinct(nil) 应匹配 email IS NULL 的行
@@ -235,7 +239,8 @@ func TestPG_ForUpdate(t *testing.T) {
 	wrapped := fusion.WrapDB(db)
 	Users := fusion.Register[PGUser]("pg_users")
 
-	u := &PGUser{}; u.Name.Set("alice")
+	u := &PGUser{}
+	u.Name.Set("alice")
 	fusion.Insert(Users, wrapped, u).Exec(ctx)
 
 	// 事务内 ForUpdate().One() 应生成 FOR UPDATE 且不报错
@@ -270,7 +275,10 @@ func TestPG_WindowRowNumber(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE pg_emps (id BIGSERIAL PRIMARY KEY, dept TEXT, salary BIGINT)`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	for _, r := range []struct{ id, sal int64; dept string }{
+	for _, r := range []struct {
+		id, sal int64
+		dept    string
+	}{
 		{1, 100, "eng"}, {2, 200, "eng"}, {3, 150, "eng"},
 		{4, 120, "mkt"}, {5, 90, "mkt"},
 	} {
@@ -324,7 +332,10 @@ func TestPG_CTE(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	// 树：1(root)→2,3；2→4
-	for _, r := range []struct{ id, pid int64; body string }{
+	for _, r := range []struct {
+		id, pid int64
+		body    string
+	}{
 		{1, 0, "root"}, {2, 1, "c1"}, {3, 1, "c2"}, {4, 2, "c1-1"},
 	} {
 		db.ExecContext(ctx, `INSERT INTO pg_comments (id,pid,body) VALUES ($1,$2,$3)`, r.id, r.pid, r.body)
@@ -391,8 +402,8 @@ func TestPG_Union(t *testing.T) {
 
 // PGItem 带 JSONB 字段。
 type PGItem struct {
-	ID     col.Col[int64]
-	Meta   col.Json[map[string]any]
+	ID   col.Col[int64]
+	Meta col.Json[map[string]any]
 }
 
 // TestPG_JSONB JSONB 字段往返。
@@ -451,7 +462,9 @@ func TestPG_CompositePK(t *testing.T) {
 
 	// Insert（复合 PK 都显式提供）
 	ur := &PGUserRole{}
-	ur.UserID.Set(1); ur.RoleID.Set(10); ur.Name.Set("admin")
+	ur.UserID.Set(1)
+	ur.RoleID.Set(10)
+	ur.Name.Set("admin")
 	if err := fusion.Insert(UserRoles, wrapped, ur).Exec(ctx); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -499,8 +512,8 @@ func TestPG_DeadlockRetry(t *testing.T) {
 	go func() {
 		defer close(done)
 		txA, _ := db.BeginTx(ctx, nil)
-		txA.Exec(`SELECT v FROM pg_dl WHERE id=1 FOR UPDATE`) // 锁 id=1
-		time.Sleep(600 * time.Millisecond)                    // 等 B 锁 id=2
+		txA.Exec(`SELECT v FROM pg_dl WHERE id=1 FOR UPDATE`)           // 锁 id=1
+		time.Sleep(600 * time.Millisecond)                              // 等 B 锁 id=2
 		_, err := txA.Exec(`SELECT v FROM pg_dl WHERE id=2 FOR UPDATE`) // 请求 id=2 → 阻塞/死锁
 		if err != nil {
 			aErrText = err.Error()
@@ -511,8 +524,8 @@ func TestPG_DeadlockRetry(t *testing.T) {
 	// 主 goroutine B：锁 id=2，等 A 锁 id=1 后，请求 id=1 → 死锁
 	time.Sleep(200 * time.Millisecond) // 让 A 先锁 id=1
 	txB, _ := db.BeginTx(ctx, nil)
-	txB.Exec(`SELECT v FROM pg_dl WHERE id=2 FOR UPDATE`) // 锁 id=2
-	time.Sleep(600 * time.Millisecond)                    // 确保 A 在等 id=2
+	txB.Exec(`SELECT v FROM pg_dl WHERE id=2 FOR UPDATE`)            // 锁 id=2
+	time.Sleep(600 * time.Millisecond)                               // 确保 A 在等 id=2
 	_, bErr := txB.Exec(`SELECT v FROM pg_dl WHERE id=1 FOR UPDATE`) // 请求 id=1 → 死锁
 	bErrText := ""
 	if bErr != nil {
@@ -681,9 +694,9 @@ func TestPG_Numeric(t *testing.T) {
 
 // PGJSONbRaw 用 Col[map[string]any] 直接读写 jsonb（验证 marshal 写 + unmarshal 读双向）。
 type PGJSONbRaw struct {
-	ID      col.Col[int64]
-	Specs   col.Col[map[string]any] // jsonb → pgx 返回 []byte → unmarshalJSON 解析
-	Tags    col.Col[[]string]       // jsonb 数组
+	ID    col.Col[int64]
+	Specs col.Col[map[string]any] // jsonb → pgx 返回 []byte → unmarshalJSON 解析
+	Tags  col.Col[[]string]       // jsonb 数组
 }
 
 // TestPG_JSONbRaw PG jsonb 列用 Col[map]/Col[slice] 直接双向读写。

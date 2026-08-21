@@ -1,6 +1,6 @@
 module github.com/sth4me/fusion
 
-go 1.26
+go 1.27.0
 
 require (
 	github.com/go-sql-driver/mysql v1.10.0

@@ -69,8 +69,8 @@ func (i *Inserter[T]) OnConflict(conflictCols, updateCols []string) *Inserter[T]
 	i.doUpsert = true
 	i.conflictFields = conflictCols
 	i.updateFields = updateCols
-	i.conflictSets = nil   // 互斥：OnConflict 覆盖 OnConflictSet
-	i.doNothing = false    // 互斥：OnConflict 覆盖 DoNothing
+	i.conflictSets = nil // 互斥：OnConflict 覆盖 OnConflictSet
+	i.doNothing = false  // 互斥：OnConflict 覆盖 DoNothing
 	return i
 }
 
@@ -81,7 +81,7 @@ func (i *Inserter[T]) OnConflict(conflictCols, updateCols []string) *Inserter[T]
 // MySQL 不支持 DO NOTHING（无对应语法；INSERT IGNORE 忽略所有错误而非仅唯一键冲突，
 // 语义不等价）。MySQL 下调用返回 error：Exec 时校验方言后报错，需要时用 Raw 兜底。
 //
-// 用法：fusion.EInsert(engine, Roles, &r).OnConflictDoNothing([]string{"role_code"}).Exec(ctx)
+// 用法：engine.Insert(Roles, &r).OnConflictDoNothing([]string{"role_code"}).Exec(ctx)
 func (i *Inserter[T]) OnConflictDoNothing(conflictCols []string) *Inserter[T] {
 	i.doUpsert = true
 	i.conflictFields = conflictCols
@@ -96,7 +96,7 @@ func (i *Inserter[T]) OnConflictDoNothing(conflictCols []string) *Inserter[T] {
 //
 // 用法（库存累加：冲突时 available = stocks.available + excluded.available）：
 //
-//	fusion.EInsert(engine, Stocks, po).
+//	engine.Insert(Stocks, po).
 //	    OnConflictSet(
 //	        []string{"sku_id", "location_id"},
 //	        []builder.UpsertSet{
@@ -284,7 +284,7 @@ func (i *Inserter[T]) SQL() (string, []any, error) {
 		ConflictCols:  i.conflictFields,
 		UpdateCols:    i.updateFields,
 		ConflictSets:  i.conflictSets,
-			DoNothing:     i.doNothing,
+		DoNothing:     i.doNothing,
 	}
 	sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
 	return sqlStr, args, nil
@@ -310,7 +310,7 @@ func (i *Inserter[T]) execSingle(ctx context.Context) error {
 		ConflictCols:  i.conflictFields,
 		UpdateCols:    i.updateFields,
 		ConflictSets:  i.conflictSets,
-			DoNothing:     i.doNothing,
+		DoNothing:     i.doNothing,
 	}
 	sqlStr, args := builder.BuildINSERT(i.table.Meta, q, vals, i.d)
 
@@ -440,7 +440,6 @@ func (i *Inserter[T]) execBatchRowByRow(ctx context.Context) error {
 	return nil
 }
 
-
 // returningCols 返回需要回填的主键列（复合主键时返回多列；RETURNING 多列扫描已支持）。
 // MySQL LastInsertId 路径仅回填首个主键（已知限制）。
 func (i *Inserter[T]) returningCols() []string {
@@ -544,8 +543,7 @@ type Updater[T any] struct {
 	where  expr.Expr
 	all    bool // 强制全字段更新（即使未 Set）
 
-	
-// expectAffected >0 时校验受影响行数必须等于该值（乐观锁用：WHERE version=? 冲突时
+	// expectAffected >0 时校验受影响行数必须等于该值（乐观锁用：WHERE version=? 冲突时
 	// rows=0，默认静默成功会掩盖并发冲突；设 1 则 rows≠1 报错）。0=不校验（默认兼容）。
 	expectAffected int
 }
@@ -553,6 +551,7 @@ type Updater[T any] struct {
 // ErrExpectAffectedMismatch 期望受影响行数不符（乐观锁冲突，见 Updater.ExpectAffected）。
 // 调用方可用 errors.Is 识别并发冲突，映射为业务错误（如 409/400）。
 var ErrExpectAffectedMismatch = errors.New("fusion: affected rows mismatch (optimistic lock conflict)")
+
 // NewUpdate 构造 Updater。
 func NewUpdate[T any](t *meta.Table[T], d dialect.Dialect, execer queryExecer, target *T) *Updater[T] {
 	return &Updater[T]{table: t, d: d, execer: execer, target: target}

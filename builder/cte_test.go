@@ -50,7 +50,7 @@ func TestCTE_Recursive(t *testing.T) {
 		Table: "t",
 		CTEs: []CTESpec{
 			{Name: "tree", Recursive: true, Columns: []string{"id", "pid"},
-				SQL: "SELECT id, pid FROM t WHERE id = ? UNION ALL SELECT c.id, c.pid FROM t c JOIN tree ON c.pid = tree.id",
+				SQL:  "SELECT id, pid FROM t WHERE id = ? UNION ALL SELECT c.id, c.pid FROM t c JOIN tree ON c.pid = tree.id",
 				Args: []any{1}},
 		},
 	}

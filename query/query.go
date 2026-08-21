@@ -29,25 +29,25 @@ import (
 
 // Query 是 SELECT 查询构建器。
 type Query[T any] struct {
-	table     *meta.Table[T]
-	d         dialect.Dialect
-	execer    queryExecer
+	table  *meta.Table[T]
+	d      dialect.Dialect
+	execer queryExecer
 
-	where     expr.Expr
-	orders    []builder.OrderItem
-	limit     int
-	offset    int
-	preloads  []string // 要预加载的关联字段名
+	where    expr.Expr
+	orders   []builder.OrderItem
+	limit    int
+	offset   int
+	preloads []string // 要预加载的关联字段名
 
 	selectCols []builder.SelectItem // 投影列（空则整表）
 	joins      []builder.JoinSpec   // JOIN 子句
 	groupBy    []builder.GroupItem  // GROUP BY
 	having     expr.Expr            // HAVING
 	distinct   bool
-	alias      string               // 主表别名（Join/投影场景需要）
-	lockClause string               // 锁子句（FOR UPDATE 等）
-	ctes       []builder.CTESpec    // WITH 子句（CTE）
-	unscoped   bool                 // true=跳过软删除自动过滤（查询含已删除行）
+	alias      string            // 主表别名（Join/投影场景需要）
+	lockClause string            // 锁子句（FOR UPDATE 等）
+	ctes       []builder.CTESpec // WITH 子句（CTE）
+	unscoped   bool              // true=跳过软删除自动过滤（查询含已删除行）
 }
 
 // QueryExecer 抽象执行 SQL 的能力（*sql.DB 或 *sql.Tx 都满足）。
@@ -112,8 +112,9 @@ func (q *Query[T]) Select(items ...builder.SelectItem) *Query[T] {
 // on 可在任意时刻构造（无需先 As），因为 ref() 始终返回 "表名.列名"。
 //
 // 用法：
-//   fusion.From(Users, db).As("u").
-//       Join(fusion.InnerJoin, Depts, "d", Users.Proto.DeptID.EqCol(Depts.Proto.ID))
+//
+//	fusion.From(Users, db).As("u").
+//	    Join(fusion.InnerJoin, Depts, "d", Users.Proto.DeptID.EqCol(Depts.Proto.ID))
 func (q *Query[T]) Join(kind string, joinedTable meta.TableOf, alias string, on expr.Expr) *Query[T] {
 	q.joins = append(q.joins, builder.JoinSpec{
 		Kind:  kind,
@@ -215,7 +216,6 @@ func (q *Query[T]) buildSelectQuery() builder.SelectQuery {
 		CTEs:       q.ctes,
 	}
 }
-
 
 // AllInto 执行查询，扫描进 out 指向的 []V 切片（投影结构体，需已 Register）。
 // 用于灵活 Join / 聚合查询的结果承载（V 是自定义投影结构体，非模型 T）。

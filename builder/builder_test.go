@@ -9,7 +9,7 @@ import (
 )
 
 type tUser struct {
-	ID   int64  // 非包装字段用于纯 meta 测试（builder 不依赖 Col）
+	ID   int64 // 非包装字段用于纯 meta 测试（builder 不依赖 Col）
 	Name string
 	Age  int
 }

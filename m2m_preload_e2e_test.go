@@ -57,7 +57,7 @@ func setupM2MDB(t *testing.T) (fusion.DB, *sql.DB) {
 func TestE2M_M2M_Preload(t *testing.T) {
 	wrapped, raw := setupM2MDB(t)
 	defer raw.Close()
-	_ = fusion.Register[MTag]("mtags")         // 子类型必须注册（m2m 解析子类型用）
+	_ = fusion.Register[MTag]("mtags")          // 子类型必须注册（m2m 解析子类型用）
 	_ = fusion.Register[MUserTag]("muser_tags") // 连接表必须注册
 	Users := fusion.Register[MUser]("musers")
 
@@ -66,8 +66,8 @@ func TestE2M_M2M_Preload(t *testing.T) {
 		func(u *MUser) any { return &u.Tags },
 		func(j *MUserTag) any { return &j.UserID }, // 连接表指向父(user)的外键
 		func(j *MUserTag) any { return &j.TagID },  // 连接表指向子(tag)的外键
-		func(u *MUser) any { return &u.ID },         // 父主键
-		func(tg *MTag) any { return &tg.ID },        // 子主键
+		func(u *MUser) any { return &u.ID },        // 父主键
+		func(tg *MTag) any { return &tg.ID },       // 子主键
 	)
 
 	users, err := fusion.From(Users, wrapped).

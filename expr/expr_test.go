@@ -4,8 +4,8 @@ import "testing"
 
 // fakeRenderer 用于测试：占位符用 ?（MySQL 风格），收集参数，列引用用反引号。
 type fakeRenderer struct {
-	n     int
-	args  []any
+	n    int
+	args []any
 }
 
 func (f *fakeRenderer) NextPlaceholder() string { f.n++; return "?" }
@@ -209,17 +209,17 @@ func TestSkipNonCode(t *testing.T) {
 	}{
 		// 字符串字面量（' 在索引 10，闭合 ' 在索引 12，返回 13）
 		{`WHERE x = '?' AND y = ?`, 10, 13},
-		{`'it''s ok'`, 0, 10},                  // 转义单引号 '' → 结束于 10（len）
-		{`'unclosed`, 0, 9},                    // 未闭合跳到末尾（len=9）
+		{`'it''s ok'`, 0, 10}, // 转义单引号 '' → 结束于 10（len）
+		{`'unclosed`, 0, 9},   // 未闭合跳到末尾（len=9）
 		// 行注释（从 0 起，到 \n 前结束；用真实换行符）
 		{"-- comment ?\nx = ?", 0, 12},
 		// 块注释
-		{`/* a ? b */ x = ?`, 0, 11},           // 块注释到 */ 后（索引 11）
+		{`/* a ? b */ x = ?`, 0, 11}, // 块注释到 */ 后（索引 11）
 		// 非字面量/注释：返回原 i
 		{`x = ?`, 0, 0},
 		{`x = ?`, 4, 4},
-		{`a - b`, 2, 2},                        // 单个 - 不是注释
-		{`a / b`, 2, 2},                        // 单个 / 不是块注释
+		{`a - b`, 2, 2}, // 单个 - 不是注释
+		{`a / b`, 2, 2}, // 单个 / 不是块注释
 	}
 	for _, c := range cases {
 		got := SkipNonCode(c.sql, c.i)

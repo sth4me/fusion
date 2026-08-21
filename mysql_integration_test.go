@@ -3,8 +3,9 @@
 // 本文件验证 MySQL/MariaDB 专属行为（默认 go test 不包含；需 go test -tags mysql）。
 //
 // 运行前提：本地或 CI 有可用的 MySQL，并通过环境变量 TEST_MYSQL_DSN 提供 DSN，如：
-//   TEST_MYSQL_DSN="root:123456@tcp(localhost:3306)/fusion_test?parseTime=true&multiStatements=true" \
-//     go test -tags mysql ./...
+//
+//	TEST_MYSQL_DSN="root:123456@tcp(localhost:3306)/fusion_test?parseTime=true&multiStatements=true" \
+//	  go test -tags mysql ./...
 //
 // 未设 TEST_MYSQL_DSN 时所有用例 t.Skip。
 // parseTime=true 必须开（否则驱动把 DATETIME 返回为 []byte，time 扫描出错）。
@@ -81,14 +82,14 @@ func TestMySQL_BasicCRUD(t *testing.T) {
 
 	u := &MyUser{}
 	u.Name.Set("alice")
-	if err := fusion.EInsert(engine, Users, u).Exec(ctx); err != nil {
+	if err := engine.Insert(Users, u).Exec(ctx); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	if u.ID.Get() == 0 {
 		t.Error("auto-increment id not backfilled via LastInsertId")
 	}
 
-	got, err := fusion.EFrom(engine, Users).Where(Users.Proto.Name.Eq("alice")).One(ctx)
+	got, err := engine.From(Users).Where(Users.Proto.Name.Eq("alice")).One(ctx)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestMySQL_BatchInsertLastInsertID(t *testing.T) {
 	targets[0].Name.Set("a")
 	targets[1].Name.Set("b")
 	targets[2].Name.Set("c")
-	if err := fusion.EInsertBatch(engine, Users, targets).Exec(ctx); err != nil {
+	if err := engine.InsertBatch(Users, targets).Exec(ctx); err != nil {
 		t.Fatalf("batch insert: %v", err)
 	}
 	// C3 回归：每行的 ID 都应被回填（原 bug 只回填首行）
@@ -157,8 +158,9 @@ func TestMySQL_ReturningBatch(t *testing.T) {
 		// MySQL：开 RETURNING 应失败（验证方言标志不会误生成支持不了的 SQL）
 		engine := fusion.New(db, fusion.WithDialect(dialect.NewMySQL(true)))
 		Users := fusion.Register[MyUser]("my_users")
-		u := &MyUser{}; u.Name.Set("probe")
-		err := fusion.EInsert(engine, Users, u).Exec(ctx)
+		u := &MyUser{}
+		u.Name.Set("probe")
+		err := engine.Insert(Users, u).Exec(ctx)
 		if err == nil {
 			t.Skip("this MySQL supports RETURNING (newer than expected); skipping negative test")
 		}
@@ -169,8 +171,10 @@ func TestMySQL_ReturningBatch(t *testing.T) {
 	engine := fusion.New(db, fusion.WithDialect(dialect.NewMySQL(true)))
 	Users := fusion.Register[MyUser]("my_users")
 	targets := []*MyUser{{}, {}, {}}
-	targets[0].Name.Set("x"); targets[1].Name.Set("y"); targets[2].Name.Set("z")
-	if err := fusion.EInsertBatch(engine, Users, targets).Exec(ctx); err != nil {
+	targets[0].Name.Set("x")
+	targets[1].Name.Set("y")
+	targets[2].Name.Set("z")
+	if err := engine.InsertBatch(Users, targets).Exec(ctx); err != nil {
 		t.Fatalf("batch insert with RETURNING: %v", err)
 	}
 	for i, tg := range targets {
@@ -245,13 +249,16 @@ func TestMySQL_EqDistinct(t *testing.T) {
 	engine := fusion.New(db, fusion.WithDialect(d))
 	Users := fusion.Register[MyUser]("my_users")
 
-	u1 := &MyUser{}; u1.Name.Set("null-email")
-	fusion.EInsert(engine, Users, u1).Exec(ctx)
-	u2 := &MyUser{}; u2.Name.Set("with-email"); u2.Email.Set(strPtr("a@e.com"))
-	fusion.EInsert(engine, Users, u2).Exec(ctx)
+	u1 := &MyUser{}
+	u1.Name.Set("null-email")
+	engine.Insert(Users, u1).Exec(ctx)
+	u2 := &MyUser{}
+	u2.Name.Set("with-email")
+	u2.Email.Set(strPtr("a@e.com"))
+	engine.Insert(Users, u2).Exec(ctx)
 
 	// EqDistinct(nil) → MySQL 生成 col <=> NULL，应匹配 NULL 行
-	got, err := fusion.EFrom(engine, Users).
+	got, err := engine.From(Users).
 		Where(Users.Proto.Email.EqDistinct((*string)(nil))).
 		All(ctx)
 	if err != nil {
@@ -280,20 +287,22 @@ func TestMySQL_Upsert(t *testing.T) {
 
 	// 首次插入
 	u := &MyUser{}
-	u.Name.Set("alice"); u.Email.Set(strPtr("a@e.com"))
-	if err := fusion.EUpsert(engine, Users, u).Exec(ctx); err != nil {
+	u.Name.Set("alice")
+	u.Email.Set(strPtr("a@e.com"))
+	if err := engine.Upsert(Users, u).Exec(ctx); err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
 	// 再次 upsert 同 email（冲突）→ 应更新 name 而非报错
 	u2 := &MyUser{}
-	u2.Name.Set("alice2"); u2.Email.Set(strPtr("a@e.com"))
-	if err := fusion.EUpsert(engine, Users, u2).
+	u2.Name.Set("alice2")
+	u2.Email.Set(strPtr("a@e.com"))
+	if err := engine.Upsert(Users, u2).
 		OnConflict([]string{"email"}, []string{"name"}).
 		Exec(ctx); err != nil {
 		t.Fatalf("upsert on conflict: %v", err)
 	}
 	// 查询确认 name 被更新为 alice2
-	got, _ := fusion.EFrom(engine, Users).Where(Users.Proto.Email.EqDistinct(strPtr("a@e.com"))).One(ctx)
+	got, _ := engine.From(Users).Where(Users.Proto.Email.EqDistinct(strPtr("a@e.com"))).One(ctx)
 	if got.Name.Get() != "alice2" {
 		t.Errorf("after upsert name got %q, want alice2", got.Name.Get())
 	}
@@ -315,11 +324,12 @@ func TestMySQL_ForUpdate(t *testing.T) {
 	engine := fusion.New(db, fusion.WithDialect(d))
 	Users := fusion.Register[MyUser]("my_users")
 
-	u := &MyUser{}; u.Name.Set("alice")
-	fusion.EInsert(engine, Users, u).Exec(ctx)
+	u := &MyUser{}
+	u.Name.Set("alice")
+	engine.Insert(Users, u).Exec(ctx)
 
-	err := fusion.ETx(engine, ctx, func(ctx context.Context) error {
-		_, err := fusion.EFrom(engine, Users).
+	err := engine.Tx(ctx, func(ctx context.Context) error {
+		_, err := engine.From(Users).
 			Where(Users.Proto.ID.Eq(u.ID.Get())).
 			ForUpdate().
 			One(ctx)

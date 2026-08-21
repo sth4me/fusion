@@ -14,9 +14,9 @@ import (
 //
 // 零侵入：Json 实现 driver.Valuer + sql.Scanner + FieldDescriptor，复用 Col[T] 的序列化路径。
 type Json[T any] struct {
-	V    T
-	set  bool
-	col  string // 列名（由 meta.Register 经 SetMeta 填充）
+	V   T
+	set bool
+	col string // 列名（由 meta.Register 经 SetMeta 填充）
 }
 
 // Set 设置值。

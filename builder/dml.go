@@ -30,8 +30,9 @@ type InsertQuery struct {
 }
 
 // UpsertSet 是 ON CONFLICT 自定义 SET 子句项。
-//   Col   — 要更新的列名（已引用）
-//   Value — 右值表达式（expr.UpsertValue）
+//
+//	Col   — 要更新的列名（已引用）
+//	Value — 右值表达式（expr.UpsertValue）
 type UpsertSet struct {
 	Col   string
 	Value expr.UpsertValue
@@ -86,8 +87,10 @@ func BuildINSERTBatch(m *meta.ModelMeta, q InsertQuery, rows [][]any, d dialect.
 }
 
 // renderUpsertSets 渲染自定义 SET 表达式的 UPSERT 子句。
-//   PG/SQLite: `ON CONFLICT (col1, col2) DO UPDATE SET "table"."a" = "table"."a" + excluded."b", ...`
-//   MySQL:     `ON DUPLICATE KEY UPDATE `a` = `a` + VALUES(`b`), ...`
+//
+//	PG/SQLite: `ON CONFLICT (col1, col2) DO UPDATE SET "table"."a" = "table"."a" + excluded."b", ...`
+//	MySQL:     `ON DUPLICATE KEY UPDATE `a` = `a` + VALUES(`b`), ...`
+//
 // Col 是裸列名，由本函数引用。渲染过程中通过 r（renderer）收集参数。
 //
 // 特别地，SET 右值的列引用强制保留表前缀（临时启用 keepPrefix）：

@@ -14,9 +14,9 @@ import (
 
 // SDItem 软删除测试模型（带 col.SoftDelete 字段）。
 type SDItem struct {
-	ID       col.Col[int64]
-	Name     col.Col[string]
-	Deleted  col.SoftDelete // 软删除字段 → deleted_at 列
+	ID      col.Col[int64]
+	Name    col.Col[string]
+	Deleted col.SoftDelete // 软删除字段 → deleted_at 列
 }
 
 func setupSoftDeleteDB(t *testing.T) (fusion.DB, *sql.DB) {

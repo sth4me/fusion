@@ -23,11 +23,11 @@ const (
 
 // Diff 描述一处模型与 schema 的不一致。
 type Diff struct {
-	Table  string   // 表名
+	Table  string // 表名
 	Kind   DiffKind
-	Detail string   // 人类可读细节
-	Model  string   // 模型类型名（如 fusion_test.User）
-	Column string   // 涉及列名（适用时）
+	Detail string // 人类可读细节
+	Model  string // 模型类型名（如 fusion_test.User）
+	Column string // 涉及列名（适用时）
 }
 
 // Bind 比较已注册模型（meta.TableOf）与数据库内省结果（Catalog），返回所有差异。

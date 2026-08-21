@@ -87,19 +87,19 @@ type GroupItem interface {
 
 // SelectQuery 描述一个 SELECT 查询的配置。
 type SelectQuery struct {
-	Table      string        // 主表名
-	Alias      string        // 主表别名
-	SelectCols []SelectItem  // 投影列（空则整表所有列，向后兼容）
-	Joins      []JoinSpec    // JOIN 子句
+	Table      string       // 主表名
+	Alias      string       // 主表别名
+	SelectCols []SelectItem // 投影列（空则整表所有列，向后兼容）
+	Joins      []JoinSpec   // JOIN 子句
 	Where      expr.Expr
-	GroupBy    []GroupItem   // GROUP BY 项
+	GroupBy    []GroupItem // GROUP BY 项
 	Having     expr.Expr
-	Orders     []OrderItem   // 排序子句
+	Orders     []OrderItem // 排序子句
 	Distinct   bool
 	Limit      int
 	Offset     int
-	LockClause string        // 锁子句（"FOR UPDATE"/"FOR SHARE"/"FOR UPDATE NOWAIT"等，空=无锁）
-	CTEs       []CTESpec     // WITH 子句（CTE，含递归）；渲染在 SELECT 之前
+	LockClause string    // 锁子句（"FOR UPDATE"/"FOR SHARE"/"FOR UPDATE NOWAIT"等，空=无锁）
+	CTEs       []CTESpec // WITH 子句（CTE，含递归）；渲染在 SELECT 之前
 }
 
 // CTESpec 描述一个 CTE（公用表表达式）。

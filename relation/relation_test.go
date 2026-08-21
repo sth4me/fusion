@@ -24,15 +24,15 @@ type tDept struct {
 }
 
 type tPost struct {
-	ID     col.Col[int64]
-	UID    col.Col[int64]
-	Title  col.Col[string]
+	ID    col.Col[int64]
+	UID   col.Col[int64]
+	Title col.Col[string]
 }
 
 type tProfile struct {
-	ID    col.Col[int64]
-	UID   col.Col[int64] // has_one：外键在 profile
-	Bio   col.Col[string]
+	ID  col.Col[int64]
+	UID col.Col[int64] // has_one：外键在 profile
+	Bio col.Col[string]
 }
 
 // UserPost m2m 连接表

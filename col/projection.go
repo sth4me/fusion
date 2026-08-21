@@ -11,12 +11,12 @@ import (
 type SelectItem struct {
 	// 普通列：colRef 存 table.col，isAgg=false
 	// 聚合：funcName 存函数名（SUM/AVG/...），colRef 存内部列引用或 "*"，isAgg=true
-	colRef    string // 列引用原始形式（table.col）或 "*"
-	isAgg     bool   // 是否聚合
-	funcName  string // 聚合函数名（COUNT/SUM/AVG/MIN/MAX）
-	as        string // AS 别名（可空）
-	over      string // OVER (...) 子句原文（窗口函数；可空=非窗口）
-	rawInner  string // 非空时作为函数体原文（不 quote），用于 LAG(col,2) 等带多参/字面量的窗口函数
+	colRef   string // 列引用原始形式（table.col）或 "*"
+	isAgg    bool   // 是否聚合
+	funcName string // 聚合函数名（COUNT/SUM/AVG/MIN/MAX）
+	as       string // AS 别名（可空）
+	over     string // OVER (...) 子句原文（窗口函数；可空=非窗口）
+	rawInner string // 非空时作为函数体原文（不 quote），用于 LAG(col,2) 等带多参/字面量的窗口函数
 }
 
 // As 设置投影别名（SELECT ... AS alias）。
@@ -36,8 +36,9 @@ func (s SelectItem) Alias() string { return s.as }
 // 渲染：func(col) OVER (PARTITION BY ... ORDER BY ...) AS alias。
 //
 // 用法：
-//   fusion.Sum(amount).Over([]string{"dept_id"}, []string{"age DESC"}).As("running_total")
-//   fusion.RowNumber().Over(nil, []string{"age DESC"}).As("rn")
+//
+//	fusion.Sum(amount).Over([]string{"dept_id"}, []string{"age DESC"}).As("running_total")
+//	fusion.RowNumber().Over(nil, []string{"age DESC"}).As("rn")
 func (s SelectItem) Over(partitionCols, orderCols []string) SelectItem {
 	var b string
 	if len(partitionCols) > 0 {

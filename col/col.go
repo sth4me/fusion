@@ -22,7 +22,7 @@ import (
 // Col[T] 的 T 若为指针类型（如 *string），则 nil 表示数据库 NULL（见 #3）。
 type Col[T any] struct {
 	val   T
-	set   bool // 是否被显式 Set 过（用于 UPDATE 局部更新，见 #3）
+	set   bool   // 是否被显式 Set 过（用于 UPDATE 局部更新，见 #3）
 	col   string // 数据库列名（Register 填充）
 	table string // 表别名（builder 渲染时设置）
 }

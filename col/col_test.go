@@ -90,8 +90,8 @@ func TestCompareExprs(t *testing.T) {
 // 内部 mini renderer
 type miniR struct{ n int }
 
-func (m *miniR) NextPlaceholder() string { m.n++; return "?" }
-func (m *miniR) AddParam(any)            {}
+func (m *miniR) NextPlaceholder() string   { m.n++; return "?" }
+func (m *miniR) AddParam(any)              {}
 func (m *miniR) ExcludedRef(string) string { return "" }
 func (m *miniR) QuoteCol(tc string) string {
 	out := ""

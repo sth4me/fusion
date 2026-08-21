@@ -15,20 +15,21 @@ import (
 
 	"github.com/sth4me/fusion/col"
 	"github.com/sth4me/fusion/dialect"
+	"github.com/sth4me/fusion/expr"
 	"github.com/sth4me/fusion/hook"
 	"github.com/sth4me/fusion/logging"
 	"github.com/sth4me/fusion/meta"
-	"github.com/sth4me/fusion/schema"
-	"github.com/sth4me/fusion/expr"
-	"github.com/sth4me/fusion/relation"
 	"github.com/sth4me/fusion/query"
+	"github.com/sth4me/fusion/relation"
 	"github.com/sth4me/fusion/scan"
+	"github.com/sth4me/fusion/schema"
 	"github.com/sth4me/fusion/tx"
 )
 
 // ErrExpectAffectedMismatch 期望受影响行数不符（乐观锁冲突，见 Updater.ExpectAffected）。
 // re-export query 包哨兵：调用方 errors.Is(err, fusion.ErrExpectAffectedMismatch) 识别。
 var ErrExpectAffectedMismatch = query.ErrExpectAffectedMismatch
+
 // 默认方言（全局）。可由 SetDefaultDialect 修改；读写在 defaultDialectMu 下，
 // 消除原无锁访问的 data race。
 var (
@@ -504,6 +505,7 @@ func MustBind(cat *Catalog, tab meta.TableOf) {
 //   - 从外键推断 belongs_to（子表）+ has_many（引用表），按命名约定匹配模型字段。
 //   - 手写 relation.HasMany/BelongsTo 已注册的关联不被覆盖。
 //   - DB 无外键时 no-op，完全靠手写关联。
+//
 // 注册后即可 Preload（如 posts.dept_id → depts.id，自动等价于
 // fusion.BelongsTo(...)/fusion.HasMany(...)）。
 func AutoRegisterRelations(cat *Catalog) {
@@ -521,4 +523,3 @@ func formatDiffs(diffs []SchemaDiff) string {
 
 // Queryer 是 LoadSchema 所需的最小查询接口（*sql.DB / *sql.Tx 满足）。
 type Queryer = schema.Queryer
-

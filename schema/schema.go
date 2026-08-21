@@ -33,7 +33,7 @@ type Catalog struct {
 type Table struct {
 	Name        string
 	Columns     []Column
-	PrimaryKey  []string    // []string 支持复合主键
+	PrimaryKey  []string // []string 支持复合主键
 	ForeignKeys []ForeignKey
 	Indexes     []Index
 }

@@ -157,6 +157,7 @@ func unmarshalJSON(data []byte, rv reflect.Value) bool {
 	}
 	return false
 }
+
 // 非 0 → true；0 → false。非整数类返回 (false, false)。
 func scanBoolFromIntish(src any) (bool, bool) {
 	switch x := src.(type) {
@@ -229,9 +230,9 @@ type sqlScanner interface {
 
 // 确保 Col 实现关键接口
 var (
-	_ driver.Valuer  = Col[int]{}
-	_ sqlScanner     = (*Col[int])(nil)
-	_ jsonMarshaler  = Col[int]{}
+	_ driver.Valuer   = Col[int]{}
+	_ sqlScanner      = (*Col[int])(nil)
+	_ jsonMarshaler   = Col[int]{}
 	_ jsonUnmarshaler = (*Col[int])(nil)
 )
 

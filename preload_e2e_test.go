@@ -14,12 +14,12 @@ import (
 
 // Preload 测试模型
 type PUser struct {
-	ID       col.Col[int64]
-	Name     col.Col[string]
-	DeptID   col.Col[int64]
-	Dept     rel.Rel[PDept]
-	Profile  rel.Rel[PProfile]
-	Posts    rel.RelMany[PPost]
+	ID      col.Col[int64]
+	Name    col.Col[string]
+	DeptID  col.Col[int64]
+	Dept    rel.Rel[PDept]
+	Profile rel.Rel[PProfile]
+	Posts   rel.RelMany[PPost]
 }
 
 type PDept struct {

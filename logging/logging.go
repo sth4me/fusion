@@ -52,15 +52,15 @@ type QueryInfo struct {
 type QueryHook func(ctx context.Context, info QueryInfo) error
 
 var (
-	mu      sync.RWMutex
-	logger  = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	hooks   []QueryHook
-	slow    = 200 * time.Millisecond
-	slowMu  sync.RWMutex
+	mu     sync.RWMutex
+	logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	hooks  []QueryHook
+	slow   = 200 * time.Millisecond
+	slowMu sync.RWMutex
 
 	// sensitiveCols 需脱敏的列名集合（小写匹配）。默认含常见敏感列名。
-	sensMu         sync.RWMutex
-	sensitiveCols  = map[string]bool{
+	sensMu        sync.RWMutex
+	sensitiveCols = map[string]bool{
 		"password": true, "passwd": true, "secret": true, "token": true,
 		"api_key": true, "apikey": true, "access_token": true, "refresh_token": true,
 		"private_key": true, "privatekey": true, "credential": true, "credentials": true,
@@ -256,16 +256,16 @@ func loggerFromCtx(ctx context.Context) (*slog.Logger, time.Duration, bool) {
 // discardHandler 丢弃所有日志的 slog.Handler（用于 SetLogger(nil) 或静默场景）。
 type discardHandler struct{}
 
-func (discardHandler) Enabled(context.Context, slog.Level) bool      { return false }
-func (discardHandler) Handle(context.Context, slog.Record) error     { return nil }
-func (h discardHandler) WithAttrs([]slog.Attr) slog.Handler          { return h }
-func (h discardHandler) WithGroup(string) slog.Handler               { return h }
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (h discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return h }
+func (h discardHandler) WithGroup(string) slog.Handler           { return h }
 
 // NewDebugSQLHandler 创建面向调试的 slog.Handler：把每条查询日志渲染成
 // 一行可直接复制粘贴到 SQL 工具执行的纯文本 SQL，不经过 slog 的引号转义。
 //
 // 与默认 TextHandler/JSONHandler 的区别：后者对含双引号/空格的 SQL 值强制转义
-//（" → \"、整体加引号包裹），复制后无法直接粘进 psql/DBeaver；本 handler 直接写
+// （" → \"、整体加引号包裹），复制后无法直接粘进 psql/DBeaver；本 handler 直接写
 // SQL 原文，PG 的双引号标识符（"user_id"）原样保留。
 //
 // 它自带 SQL 组装渲染（不依赖 SetRenderSQL 全局开关）：从查询日志携带的 sql 模板
@@ -685,7 +685,7 @@ func RenderSQL(sqlStr string, args []any) string {
 // sqlLiteral 把单个参数值渲染为 SQL 字面量（仅供日志展示）。
 // 接受 driver.Value 的常见形态（fusion 的 args 经 driverVal 序列化后即此形态）：
 // nil→NULL、bool→TRUE/FALSE、整数/浮点→原样、string→带转义单引号、
-// []byte→'\'字节数据\''（hex）、time.Time→'...'、其余→fmt 兜底。
+// []byte→'\'字节数据\”（hex）、time.Time→'...'、其余→fmt 兜底。
 func sqlLiteral(v any) string {
 	if v == nil {
 		return "NULL"

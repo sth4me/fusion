@@ -145,7 +145,7 @@ func recurseRel(ctx context.Context, execer Execer, d dialect.Dialect, relField 
 	if len(results) != 1 || results[0].IsNil() {
 		return nil // 未加载或 nil
 	}
-	ptrVal := results[0]            // *T，指向原对象
+	ptrVal := results[0] // *T，指向原对象
 	elemType := ptrVal.Type().Elem()
 	slicePtr := reflect.New(reflect.SliceOf(elemType))
 	slicePtr.Elem().Set(reflect.Append(slicePtr.Elem(), ptrVal.Elem()))

@@ -97,9 +97,9 @@ func TestE2E_UnionAll(t *testing.T) {
 // === CTE e2e（递归：评论楼中楼）===
 
 type CComment struct {
-	ID     col.Col[int64]
-	PID    col.Col[int64] // 父评论 id，0=根
-	Body   col.Col[string]
+	ID   col.Col[int64]
+	PID  col.Col[int64] // 父评论 id，0=根
+	Body col.Col[string]
 }
 
 func setupCTEDB(t *testing.T) *sql.DB {
@@ -251,8 +251,8 @@ func TestE2E_WindowSumPartition(t *testing.T) {
 	wrapped := fusion.WrapDB(db)
 	Emps := fusion.Register[WEmp]("wemps")
 	type WSum struct {
-		Dept string `db:"dept"`
-		Total int64 `db:"total"`
+		Dept  string `db:"dept"`
+		Total int64  `db:"total"`
 	}
 	fusion.Register[WSum]("wemps")
 

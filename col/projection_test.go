@@ -2,7 +2,7 @@ package col
 
 import "testing"
 
-type pCol[T any] struct{ // 复用 miniR
+type pCol[T any] struct { // 复用 miniR
 }
 
 // 复用 col_extra_test.go 的 r2 renderer

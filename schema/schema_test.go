@@ -221,12 +221,12 @@ func TestParsePgArray(t *testing.T) {
 // unknownDialect 仅用于测试 IntrospectorFor 的未知分支。
 type unknownDialect struct{}
 
-func (unknownDialect) Name() string                                { return "oracle" }
-func (unknownDialect) Placeholder(int) string                      { return "?" }
-func (unknownDialect) QuoteIdent(string) string                    { return `"` + `"` }
-func (d unknownDialect) QuoteTable(n string) string                { return d.QuoteIdent(n) }
-func (unknownDialect) SupportsReturning() bool                     { return false }
-func (unknownDialect) UpsertOnConflict(_, _ []string) string       { return "" }
-func (unknownDialect) ExcludedRef(string) string                   { return "" }
-func (unknownDialect) ConflictTarget([]string) string              { return "" }
-func (unknownDialect) UpsertDoNothing([]string) string             { return "" }
+func (unknownDialect) Name() string                          { return "oracle" }
+func (unknownDialect) Placeholder(int) string                { return "?" }
+func (unknownDialect) QuoteIdent(string) string              { return `"` + `"` }
+func (d unknownDialect) QuoteTable(n string) string          { return d.QuoteIdent(n) }
+func (unknownDialect) SupportsReturning() bool               { return false }
+func (unknownDialect) UpsertOnConflict(_, _ []string) string { return "" }
+func (unknownDialect) ExcludedRef(string) string             { return "" }
+func (unknownDialect) ConflictTarget([]string) string        { return "" }
+func (unknownDialect) UpsertDoNothing([]string) string       { return "" }

@@ -224,7 +224,7 @@ func TestCompositePK_BuildPKWhere(t *testing.T) {
 	u.Name.Set("admin") // 改 Name
 
 	err := NewUpdate(tab, dialect.PostgresDialect, fe, u). // 无 Where → 自动按复合 PK
-										Exec(context.Background())
+								Exec(context.Background())
 	if err != nil {
 		t.Fatalf("update composite PK: %v", err)
 	}

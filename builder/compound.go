@@ -19,8 +19,8 @@ const (
 
 // CompoundArm 是复合查询的一条 SELECT 臂。
 type CompoundArm struct {
-	Meta   *meta.ModelMeta // 主表元信息（渲染 FROM/列）
-	Query  SelectQuery     // 该臂的 SELECT 配置
+	Meta  *meta.ModelMeta // 主表元信息（渲染 FROM/列）
+	Query SelectQuery     // 该臂的 SELECT 配置
 }
 
 // CompoundQuery 描述一个集合复合查询（UNION/INTERSECT/EXCEPT）。

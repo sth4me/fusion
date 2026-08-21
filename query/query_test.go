@@ -26,9 +26,9 @@ func regQModel() *meta.Table[qModel] {
 
 // fakeExecer 记录执行的 SQL 和参数，返回预设结果。
 type fakeExecer struct {
-	lastSQL    string
-	lastArgs   []any
-	queryErr   error
+	lastSQL  string
+	lastArgs []any
+	queryErr error
 	// 模拟返回的行数据（用于 QueryContext）
 	mockRows   *sql.Rows
 	rowScanned any

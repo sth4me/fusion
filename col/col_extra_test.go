@@ -11,8 +11,8 @@ import (
 // 辅助 renderer（复用 col_test.go 的 miniR，但这里独立避免耦合）
 type r2 struct{ n int }
 
-func (m *r2) NextPlaceholder() string { m.n++; return "?" }
-func (m *r2) AddParam(any)            {}
+func (m *r2) NextPlaceholder() string   { m.n++; return "?" }
+func (m *r2) AddParam(any)              {}
 func (m *r2) ExcludedRef(string) string { return "" }
 func (m *r2) QuoteCol(tc string) string {
 	out := ""

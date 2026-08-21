@@ -207,6 +207,7 @@ func runTop(ctx context.Context, db Beginner, mode Mode, opts *Options, fn func(
 // 但为避免引入驱动依赖，当前覆盖主流驱动的错误文本形态：
 //   - PG:   "SQLSTATE 40P01"、"ERROR: deadlock detected"、"could not serialize access"
 //   - MySQL:"Error 1213"、"Deadlock found"、"try restarting transaction"、"Lock wait timeout"
+//
 // IsRetryableError 报告错误是否为可重试的事务错误（死锁/序列化失败）。
 // 导出版本，供应用层判断是否值得重试（fusion.TxWithOpts 内部也用此判断）。
 func IsRetryableError(err error) bool { return isRetryableTxError(err) }
@@ -218,10 +219,10 @@ func isRetryableTxError(err error) bool {
 	msg := err.Error()
 	retryable := []string{
 		"40P01", "40P02", "40001", // PG SQLSTATE（5 位码，误判概率极低）
-		"Error 1213",         // MySQL deadlock（带 "Error " 前缀）
-		"Error 1205",         // MySQL lock wait timeout
-		"deadlock detected",  // PG 文本
-		"Deadlock found",     // MySQL 文本
+		"Error 1213",        // MySQL deadlock（带 "Error " 前缀）
+		"Error 1205",        // MySQL lock wait timeout
+		"deadlock detected", // PG 文本
+		"Deadlock found",    // MySQL 文本
 		"try restarting transaction",
 		"could not serialize access",
 		"serialization failure",

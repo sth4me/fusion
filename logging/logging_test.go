@@ -121,9 +121,9 @@ func TestQueryError(t *testing.T) {
 	defer restore()
 
 	LogQuery(context.Background(), QueryInfo{
-		Op:  "UPDATE",
-		SQL: "UPDATE users SET x=1",
-		Err: errors.New("db down"),
+		Op:       "UPDATE",
+		SQL:      "UPDATE users SET x=1",
+		Err:      errors.New("db down"),
 		Duration: 1 * time.Millisecond,
 	})
 	out := buf.String()

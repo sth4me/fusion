@@ -238,9 +238,9 @@ func TestTxWithOpts_RetryOnDeadlock(t *testing.T) {
 
 	calls := 0
 	err := TxWithOpts(context.Background(), db, TxModeSavepoint, &Options{
-		RetryDeadlocks:  3,
-		RetryBaseDelay:  0, // 用默认
-		RetryMaxDelay:   0,
+		RetryDeadlocks: 3,
+		RetryBaseDelay: 0, // 用默认
+		RetryMaxDelay:  0,
 	}, func(ctx context.Context) error {
 		calls++
 		if calls == 1 {

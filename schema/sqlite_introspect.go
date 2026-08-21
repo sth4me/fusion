@@ -39,12 +39,12 @@ func (sqliteIntrospector) DescribeTable(ctx context.Context, q Queryer, table st
 		return nil, fmt.Errorf("table_info: %w", err)
 	}
 	type colRow struct {
-		cid      int
-		name     string
-		typ      string
-		notNull  int
-		dflt     sql.NullString
-		pk       int
+		cid     int
+		name    string
+		typ     string
+		notNull int
+		dflt    sql.NullString
+		pk      int
 	}
 	var colRowsData []colRow
 	for colRows.Next() {
@@ -119,7 +119,7 @@ func (sqliteIntrospector) DescribeTable(ctx context.Context, q Queryer, table st
 			RefTable: rows[0].table,
 		}
 		for _, r := range rows {
-			fk.Column += r.from        // 复合外键用拼接（当前单列场景仅一个）
+			fk.Column += r.from // 复合外键用拼接（当前单列场景仅一个）
 			fk.RefColumns = append(fk.RefColumns, r.to)
 		}
 		// 单列场景修正 Column（取首个 from）
